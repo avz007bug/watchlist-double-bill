@@ -1,0 +1,11 @@
+# Cache de tiempo de ejecucion: efimero, no se sube.
+.film_cache.json
+*.tmp
+
+# La semilla SI se sube: es lo que hace que el servidor arranque
+# sabiendo el top 500. Se genera con: python watchlist_match.py --warm
+!film_cache_seed.json
+
+__pycache__/
+*.pyc
+.venv/

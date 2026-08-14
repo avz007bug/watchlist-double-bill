@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: watchlist-double-bill
+    runtime: python
+    plan: free
+    buildCommand: ""
+    startCommand: python watchlist_match.py
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: CACHE_PATH
+        value: /tmp/film_cache.json
+      - key: PYTHON_VERSION
+        value: "3.11.9"
