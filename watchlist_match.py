@@ -326,6 +326,30 @@ def fetch_section(username, section, paginate=True):
     return slugs
 
 
+def leer_vistas(username):
+    """
+    Peliculas que el usuario registro como vistas, uniendo dos fuentes:
+
+      /films/  -> 72 titulos, sin orden de fecha
+      /diary/  -> 50 visionados mas recientes
+
+    Se solapan bastante pero no del todo: medido en tres perfiles, el diario
+    aportaba entre 7 y 37 titulos que /films/ no traia. De ambas solo se puede
+    leer la primera pagina; el resto lo bloquea Letterboxd.
+    """
+    vistas = fetch_section(username, "films", paginate=False)
+    conocidas = set(vistas)
+    try:
+        diario = fetch_section(username, "diary", paginate=False)
+    except Exception:
+        diario = []          # fuente secundaria: si falla, seguimos con /films/
+    for s in diario:
+        if s not in conocidas:
+            vistas.append(s)
+            conocidas.add(s)
+    return vistas
+
+
 def build_pool(username, include_seen):
     """
     Devuelve (pool, stats).
@@ -333,14 +357,14 @@ def build_pool(username, include_seen):
       stats : conteos para mostrar en la UI
     Si el mismo slug aparece en ambos lados, gana 'seen'.
 
-    El watchlist se lee completo. Las vistas, solo la primera pagina
-    (las siguientes estan bloqueadas del lado de Letterboxd).
+    El watchlist se lee completo. Las vistas son parciales por diseno del
+    sitio: solo la primera pagina de cada fuente.
     """
     watchlist = fetch_section(username, "watchlist")
     pool = {s: "watchlist" for s in watchlist}
     seen = []
     if include_seen:
-        seen = fetch_section(username, "films", paginate=False)
+        seen = leer_vistas(username)
         for s in seen:
             pool[s] = "seen"
     return pool, {
@@ -526,13 +550,41 @@ def list_page(url, page):
     return slugs
 
 
+def _consultar_visto(url, metodo):
+    """
+    True  = la vio (200)
+    False = no la vio (404)
+    None  = no se pudo determinar (403, 429, timeout, lo que sea)
+    """
+    req = urllib.request.Request(url, method=metodo, headers={
+        "User-Agent": UA, "Accept": "text/html",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.status == 200
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        if e.code == 200:
+            return True
+        return None
+    except Exception:
+        return None
+
+
 def has_watched(username, slug):
     """
     True si el usuario registro esa pelicula como vista.
 
-    Usa /{usuario}/film/{slug}/, que responde 200 solo si la vio.
+    Usa /{usuario}/film/{slug}/, que responde 200 solo si la vio y 404 si no.
     Verificado: una pelicula en su watchlist pero no vista da 404, asi que
-    esta ruta si distingue "vista" de "quiere verla".
+    esta ruta distingue "vista" de "quiere verla".
+
+    IMPORTANTE: si la consulta no se puede resolver (403, rate limit, timeout)
+    devolvemos True, o sea "tratala como vista". Suena raro, pero el efecto es
+    saltarse esa pelicula en vez de recomendarla. Devolver False ahi seria
+    afirmar algo que no sabemos, y el sintoma es el peor posible: recomendar
+    justo lo que ya vieron.
     """
     key = f"{username}/{slug}"
     with _watch_lock:
@@ -540,37 +592,25 @@ def has_watched(username, slug):
             return _watch_cache[key]
 
     url = f"{BASE}/{username}/film/{slug}/"
-    req = urllib.request.Request(url, method="HEAD", headers={
-        "User-Agent": UA, "Accept": "text/html",
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            visto = r.status == 200
-    except urllib.error.HTTPError as e:
-        if e.code == 404:
-            visto = False
-        elif e.code == 405:                     # el servidor no acepta HEAD
-            try:
-                get(url)
-                visto = True
-            except urllib.error.HTTPError as e2:
-                visto = e2.code != 404
-            except Exception:
-                return False                    # fallo puntual: no lo guardamos
-        else:
-            return False
-    except Exception:
-        return False
+
+    visto = _consultar_visto(url, "HEAD")
+    if visto is None:
+        visto = _consultar_visto(url, "GET")     # por si rechazan HEAD
+
+    if visto is None:
+        return True          # no sabemos: no la ofrecemos, y no lo cacheamos
 
     with _watch_lock:
         _watch_cache[key] = visto
     return visto
 
 
-def take_unwatched(list_key, a, b, want=None, n=1):
+def take_unwatched(list_key, a, b, want=None, n=1, skip=None):
     """
     Baja por una lista publica en su orden y devuelve hasta n peliculas
     que NINGUNO de los dos haya visto. Sin repetir.
+
+    skip = slugs ya elegidos en otra lista, para no ofrecer la misma dos veces.
 
     want=None  -> cualquier genero. No hace falta abrir fichas durante el
                   barrido: basta preguntar si la vieron. Solo se abren las
@@ -583,6 +623,7 @@ def take_unwatched(list_key, a, b, want=None, n=1):
     if not conf:
         raise ValueError("Lista desconocida.")
 
+    skip = skip or set()
     encontradas = []
     posicion = 0
     revisadas = 0
@@ -604,6 +645,8 @@ def take_unwatched(list_key, a, b, want=None, n=1):
             for f in fichas:
                 posicion += 1
                 revisadas += 1
+                if f["slug"] in skip:
+                    continue
                 if want and not (set(f.get("genres") or []) & want):
                     continue
                 if has_watched(a, f["slug"]) or has_watched(b, f["slug"]):
@@ -669,9 +712,9 @@ def discover(raw_a, raw_b, genre=None):
             raise ValueError("Genero no disponible.")
         want = {genre}
 
-    def buscar(list_key, n):
+    def buscar(list_key, n, skip=None):
         try:
-            return take_unwatched(list_key, a, b, want, n)
+            return take_unwatched(list_key, a, b, want, n, skip)
         except Exception:
             return []
 
@@ -681,6 +724,13 @@ def discover(raw_a, raw_b, genre=None):
         f_top = pool.submit(buscar, "top500", 2)
         f_und = pool.submit(buscar, "underseen", 1)
         top, under = f_top.result(), f_und.result()
+
+    # Una misma pelicula puede estar en las dos listas. Si la de underseen
+    # ya salio arriba, se vuelve a buscar excluyendola. Solo pasa a veces,
+    # asi que no vale la pena pedir candidatas de mas por adelantado.
+    usados = {f["slug"] for f in top}
+    if under and under[0]["slug"] in usados:
+        under = buscar("underseen", 1, usados)
 
     films = [
         top[0] if len(top) > 0 else None,
@@ -833,6 +883,8 @@ PAGE = r"""<!doctype html>
   .stop-film .st a:hover{text-decoration:underline;text-decoration-color:currentColor}
   .stop-film .sm{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:6px}
   .stop-none{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
+  .disclaimer{font-family:var(--mono);font-size:11px;color:var(--dim);
+              margin:24px 0 0;padding-top:14px;border-top:1px solid var(--rule)}
 
   .warn{color:var(--sc,var(--beam))}
 
@@ -916,17 +968,17 @@ PAGE = r"""<!doctype html>
   <div class="bill">
     <div>
       <input type="text" id="a" placeholder="letterboxd.com/usuario" autocomplete="off" spellcheck="false">
-      <label class="opt"><input type="checkbox" id="seenA"> Agregar sus ultimas 72 vistas</label>
+      <label class="opt"><input type="checkbox" id="seenA"> Agregar sus vistas recientes</label>
     </div>
     <span class="amp" aria-hidden="true">&amp;</span>
     <div>
       <input type="text" id="b" placeholder="letterboxd.com/otro-usuario" autocomplete="off" spellcheck="false">
-      <label class="opt"><input type="checkbox" id="seenB"> Agregar sus ultimas 72 vistas</label>
+      <label class="opt"><input type="checkbox" id="seenB"> Agregar sus vistas recientes</label>
     </div>
   </div>
   <button id="go">Match watchlists</button>
-  <p class="note">Solo funciona con perfiles publicos. De las peliculas ya vistas, Letterboxd
-     deja leer solo la pagina mas reciente: hasta 72, no el historial completo.</p>
+  <p class="note">Solo funciona con perfiles publicos. De las peliculas ya vistas solo se
+     puede leer la actividad reciente, no el historial completo.</p>
 
   <p class="status" id="status" role="status" aria-live="polite"></p>
   <div id="gate"></div>
@@ -1195,7 +1247,8 @@ function pintarStages(){
   };
 
   box.innerHTML = `<div class="track"><i></i><i></i><i></i></div>
-    <div class="stops">${s.map(col).join("")}</div>`;
+    <div class="stops">${s.map(col).join("")}</div>
+    <p class="disclaimer">Probablemente ninguna la vieron.</p>`;
 }
 
 // ── recomendacion del top 500 que ninguno vio ──
@@ -1241,13 +1294,13 @@ function pintarPick(mode){
     <p class="pt"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a></p>
     <p class="pm">${p.year || ""}${gen ? " \u00b7 " + gen : ""}</p>
     <p class="pr">${p.rating ? p.rating.toFixed(2) : "\u2014"}</p>
-    <p class="pw">Puesto ${p.rank} del top 500 de Letterboxd, y ninguno de los dos
-       la registro como vista.</p>`;
+    <p class="pw">Puesto ${p.rank} del top 500 de Letterboxd. Probablemente
+       ninguno de los dos la vio.</p>`;
 }
 
 function renderTally(d){
   const line = p => `${esc(p.user)}: <b>${p.watchlist}</b> por ver` +
-    (p.include_seen ? ` + <b>${p.seen}</b> ultimas vistas = <b>${p.pool}</b>` : "");
+    (p.include_seen ? ` + <b>${p.seen}</b> vistas recientes = <b>${p.pool}</b>` : "");
   let html = `<p class="tally">`;
   html += d.same
     ? `${line(d.a)}<br><span class="warn">Es el mismo perfil dos veces: esto no es un
