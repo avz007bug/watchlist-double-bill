@@ -576,11 +576,21 @@ def list_page(url, page):
 
 
 def slugs_de_lista(list_key):
-    """Todas las peliculas de una lista, en orden, sin repetidas.
-    Si la lista mezcla varias fuentes, se concatenan en el orden declarado."""
+    """
+    Todas las peliculas de una lista, sin repetidas y ordenadas de mejor a
+    peor rating de Letterboxd.
+
+    El orden original de cada lista no sirve para recomendar: 'winners'
+    concatena Cannes, BAFTA y Oscar en orden cronologico, asi que sin ordenar
+    la primera sugerencia seria siempre la mas antigua de Cannes. Como los
+    ratings ya vienen en la semilla, esto no cuesta ninguna peticion.
+
+    Las que no tienen rating quedan al final, igual que en el ranking.
+    """
     conf = LISTS.get(list_key)
     if not conf:
         raise ValueError("Lista desconocida.")
+
     todos = []
     vistos = set()
     for url in conf["urls"]:
@@ -592,6 +602,14 @@ def slugs_de_lista(list_key):
                 if s not in vistos:
                     vistos.add(s)
                     todos.append(s)
+
+    def puntaje(slug):
+        f = _film_cache.get(slug) or {}
+        r = f.get("rating")
+        return (r is not None, r or 0, f.get("votes") or 0)
+
+    with _cache_lock:
+        todos.sort(key=puntaje, reverse=True)
     return todos
 
 
