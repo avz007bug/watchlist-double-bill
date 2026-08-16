@@ -57,28 +57,38 @@ SEED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # Limite por visitante. Sin esto, una sola persona puede lanzar cientos de
 # peticiones a Letterboxd desde el servidor. Solo aplica a los endpoints caros.
 RATE_WINDOW = 600       # segundos
-RATE_MAX = 25           # peticiones por ventana y por IP
+RATE_MAX = 60           # peticiones por ventana y por IP. Cada accion cuenta:
+                        # cruzar, rankear, y cada clic de "mas recomendaciones".
 
 # Listas publicas de donde salen las recomendaciones.
+# "urls" puede tener varias: se concatenan en orden y se quitan repetidas.
+# En produccion NO se descargan: se leen de la semilla. Los links solo se usan
+# al correr --warm.
 LISTS = {
     "top500": {
-        "url": "https://letterboxd.com/dave/list/letterboxd-top-500-films-history-collected/",
+        "urls": ["https://letterboxd.com/dave/list/letterboxd-top-500-films-history-collected/"],
         "pages": 7,
     },
-    # Sin uso desde que la parada del medio pasa a salir del top500.
-    # Se deja lista por si se quiere volver a enchufar.
-    "graduated": {
-        "url": "https://letterboxd.com/maxedproduction/list/films-that-have-graduated-from-the-top-100/",
+    "underseen": {
+        "urls": ["https://letterboxd.com/official/list/top-100-underseen-films/"],
         "pages": 2,
     },
-    "underseen": {
-        "url": "https://letterboxd.com/official/list/top-100-underseen-films/",
+    # Premiadas: Palma de Oro + BAFTA mejor pelicula + Oscar mejor pelicula.
+    "winners": {
+        "urls": [
+            "https://letterboxd.com/cannestracker/list/palme-dor-winners/",
+            "https://letterboxd.com/bafta/list/all-bafta-best-film-award-winners/",
+            "https://letterboxd.com/oscars/list/oscar-winning-films-best-picture/",
+        ],
         "pages": 2,
     },
 }
-LIST_URL = LISTS["top500"]["url"]   # la que usan San Valentin y Halloween
 SCAN_CHUNK = 25         # cuantas fichas abrimos por tanda antes de volver a evaluar
 MAX_SCAN = 250          # techo de fichas a revisar antes de rendirse
+
+# Solo el comando --warm puede salir a buscar listas. En produccion se leen
+# de la semilla y punto: asi el trafico a Letterboxd por este concepto es cero.
+MODO_WARM = False
 
 # Que genero define cada modo. Igual que en la UI, pero el servidor no confia en
 # lo que le mande el cliente.
@@ -189,17 +199,23 @@ def warm():
 
         python watchlist_match.py --warm
     """
+    global MODO_WARM
+    MODO_WARM = True          # unico momento en que se permite bajar listas
+
     todos = []
     paginas = {}
 
     for key, conf in LISTS.items():
-        print(f"Leyendo lista '{key}'...")
-        for page in range(1, conf["pages"] + 1):
-            slugs = list_page(conf["url"], page)
-            if not slugs:
-                break
-            paginas[f"{conf['url']}|{page}"] = slugs
-            todos.extend(slugs)
+        antes = len(todos)
+        for url in conf["urls"]:
+            for page in range(1, conf["pages"] + 1):
+                slugs = list_page(url, page)
+                if not slugs:
+                    break
+                paginas[f"{url}|{page}"] = slugs
+                todos.extend(slugs)
+        print(f"lista '{key}': {len(todos) - antes} entradas "
+              f"({len(conf['urls'])} fuente(s))")
 
     todos = list(dict.fromkeys(todos))
     print(f"\n{len(todos)} peliculas unicas. Descargando fichas...")
@@ -219,7 +235,7 @@ def warm():
 
     kb = os.path.getsize(SEED_PATH) / 1024
     print(f"\nGuardadas {len(snapshot)} peliculas ({con_genero} con genero) "
-          f"en {SEED_PATH} ({kb:.0f} KB).")
+          f"y {len(paginas)} paginas de listas en {SEED_PATH} ({kb:.0f} KB).")
     print("Ahora sube ese archivo al repo y vuelve a desplegar.")
 
 
@@ -532,12 +548,21 @@ def rank(slugs):
 # ─────────────────────────────────────────────────────────────
 
 def list_page(url, page):
-    """Slugs de una pagina de una lista publica, en el orden en que estan."""
+    """
+    Slugs de una pagina de una lista publica, en el orden en que estan.
+
+    En produccion esto sale siempre de la semilla. Si no esta ahi, devolvemos
+    vacio en vez de salir a la red: las listas se descargan una sola vez con
+    --warm y se suben al repo.
+    """
     key = (url, page)
     with _list_lock:
         hit = _list_pages.get(key)
     if hit is not None:
         return hit
+
+    if not MODO_WARM:
+        return []          # sin semilla y sin permiso de descargar
 
     full = url if page == 1 else f"{url}page/{page}/"
     try:
@@ -550,29 +575,48 @@ def list_page(url, page):
     return slugs
 
 
+def slugs_de_lista(list_key):
+    """Todas las peliculas de una lista, en orden, sin repetidas.
+    Si la lista mezcla varias fuentes, se concatenan en el orden declarado."""
+    conf = LISTS.get(list_key)
+    if not conf:
+        raise ValueError("Lista desconocida.")
+    todos = []
+    vistos = set()
+    for url in conf["urls"]:
+        for page in range(1, conf["pages"] + 1):
+            slugs = list_page(url, page)
+            if not slugs:
+                break
+            for s in slugs:
+                if s not in vistos:
+                    vistos.add(s)
+                    todos.append(s)
+    return todos
+
+
 def _consultar_visto(url, metodo):
     """
-    True  = la vio (200)
-    False = no la vio (404)
-    None  = no se pudo determinar (403, 429, timeout, lo que sea)
+    Devuelve (resultado, codigo):
+      True  = la vio (200)
+      False = no la vio (404)
+      None  = no se pudo determinar (403, 429, timeout, lo que sea)
     """
     req = urllib.request.Request(url, method=metodo, headers={
         "User-Agent": UA, "Accept": "text/html",
     })
     try:
         with urllib.request.urlopen(req, timeout=15) as r:
-            return r.status == 200
+            return (r.status == 200), r.status
     except urllib.error.HTTPError as e:
         if e.code == 404:
-            return False
-        if e.code == 200:
-            return True
-        return None
+            return False, 404
+        return None, e.code
     except Exception:
-        return None
+        return None, None
 
 
-def has_watched(username, slug):
+def has_watched(username, slug, incierto=None):
     """
     True si el usuario registro esa pelicula como vista.
 
@@ -580,11 +624,10 @@ def has_watched(username, slug):
     Verificado: una pelicula en su watchlist pero no vista da 404, asi que
     esta ruta distingue "vista" de "quiere verla".
 
-    IMPORTANTE: si la consulta no se puede resolver (403, rate limit, timeout)
-    devolvemos True, o sea "tratala como vista". Suena raro, pero el efecto es
-    saltarse esa pelicula en vez de recomendarla. Devolver False ahi seria
-    afirmar algo que no sabemos, y el sintoma es el peor posible: recomendar
-    justo lo que ya vieron.
+    Si la consulta no se resuelve (403, rate limit, timeout) devolvemos True,
+    o sea "tratala como vista", para no recomendar algo que quiza ya vieron.
+    Pero lo anotamos en 'incierto': si TODO falla, quien llama tiene que poder
+    distinguir "ya vieron todo" de "no pudimos preguntar".
     """
     key = f"{username}/{slug}"
     with _watch_lock:
@@ -593,11 +636,13 @@ def has_watched(username, slug):
 
     url = f"{BASE}/{username}/film/{slug}/"
 
-    visto = _consultar_visto(url, "HEAD")
-    if visto is None:
-        visto = _consultar_visto(url, "GET")     # por si rechazan HEAD
+    visto, codigo = _consultar_visto(url, "HEAD")
+    if visto is None and codigo == 405:
+        visto, codigo = _consultar_visto(url, "GET")   # no aceptan HEAD
 
     if visto is None:
+        if incierto is not None:
+            incierto.append(codigo)
         return True          # no sabemos: no la ofrecemos, y no lo cacheamos
 
     with _watch_lock:
@@ -605,7 +650,7 @@ def has_watched(username, slug):
     return visto
 
 
-def take_unwatched(list_key, a, b, want=None, n=1, skip=None):
+def take_unwatched(list_key, a, b, want=None, n=1, skip=None, incierto=None):
     """
     Baja por una lista publica en su orden y devuelve hasta n peliculas
     que NINGUNO de los dos haya visto. Sin repetir.
@@ -628,46 +673,43 @@ def take_unwatched(list_key, a, b, want=None, n=1, skip=None):
     posicion = 0
     revisadas = 0
 
-    for page in range(1, conf["pages"] + 1):
-        slugs = list_page(conf["url"], page)
-        if not slugs:
-            break
+    slugs = slugs_de_lista(list_key)
 
-        for i in range(0, len(slugs), SCAN_CHUNK):
-            tanda = slugs[i:i + SCAN_CHUNK]
+    for i in range(0, len(slugs), SCAN_CHUNK):
+        tanda = slugs[i:i + SCAN_CHUNK]
 
-            if want:
-                with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
-                    fichas = list(pool.map(fetch_film, tanda))
-            else:
-                fichas = [{"slug": s} for s in tanda]
+        if want:
+            with ThreadPoolExecutor(max_workers=FETCH_WORKERS) as pool:
+                fichas = list(pool.map(fetch_film, tanda))
+        else:
+            fichas = [{"slug": s} for s in tanda]
 
-            for f in fichas:
-                posicion += 1
-                revisadas += 1
-                if f["slug"] in skip:
-                    continue
-                if want and not (set(f.get("genres") or []) & want):
-                    continue
-                if has_watched(a, f["slug"]) or has_watched(b, f["slug"]):
-                    continue
-                completa = f if want else fetch_film(f["slug"])
-                encontradas.append({**completa, "rank": posicion, "scanned": revisadas})
-                if len(encontradas) >= n:
-                    save_cache()
-                    return encontradas
-
-            if revisadas >= MAX_SCAN:
+        for f in fichas:
+            posicion += 1
+            if f["slug"] in skip:
+                continue        # ya mostrada: no cuenta como trabajo nuevo
+            revisadas += 1
+            if want and not (set(f.get("genres") or []) & want):
+                continue
+            if (has_watched(a, f["slug"], incierto)
+                    or has_watched(b, f["slug"], incierto)):
+                continue
+            completa = f if want else fetch_film(f["slug"])
+            encontradas.append({**completa, "rank": posicion, "scanned": revisadas})
+            if len(encontradas) >= n:
                 save_cache()
                 return encontradas
+
+        if revisadas >= MAX_SCAN:
+            break
 
     save_cache()
     return encontradas
 
 
-def first_unwatched(list_key, a, b, want=None):
-    """La primera que ninguno vio, o None."""
-    r = take_unwatched(list_key, a, b, want, 1)
+def first_unwatched(list_key, a, b, want=None, skip=None, incierto=None):
+    """La primera que ninguno vio y que no este ya mostrada, o None."""
+    r = take_unwatched(list_key, a, b, want, 1, skip, incierto)
     return r[0] if r else None
 
 
@@ -679,32 +721,61 @@ def _dos_usuarios(raw_a, raw_b):
     return a, b
 
 
-def pick_recommendation(mode, raw_a, raw_b):
+def limpiar_skip(bruto):
+    """Slugs ya mostrados que llegan del cliente. Se validan y se acotan."""
+    if not isinstance(bruto, list):
+        return set()
+    return {s for s in bruto[:400]
+            if isinstance(s, str) and re.fullmatch(r"[a-z0-9\-]+", s)}
+
+
+def pick_recommendation(mode, raw_a, raw_b, skip=None):
     """La mejor del top 500 del genero del modo que ninguno haya visto."""
     want = MODE_GENRES.get(mode)
     if not want:
         raise ValueError("Modo desconocido.")
     a, b = _dos_usuarios(raw_a, raw_b)
-    return first_unwatched("top500", a, b, want)
+    incierto = []
+    pick = first_unwatched("top500", a, b, want, limpiar_skip(skip), incierto)
+    # Si no hay resultado pero hubo consultas sin resolver, no es que ya las
+    # vieran todas: es que Letterboxd no contesto.
+    return {"pick": pick, "incierto": bool(incierto) and pick is None}
 
 
-# Etiquetas de las tres paradas. La del medio va sin texto a proposito.
-DISCOVERY_LABELS = ["\u00bfa\u00fan?", "", "joder \U0001F6AC"]
+# Los dos modos de medidor. Cada uno reparte sus 3 huecos entre una o varias
+# listas. "winners" es identico a "discovery" salvo que bebe de una sola fuente.
+DISCOVERY_MODES = {
+    "discovery": {
+        "fuentes": [("top500", 2), ("underseen", 1)],
+        "labels": ["\u00bfa\u00fan?", "", "joder \U0001F6AC"],
+    },
+    "winners": {
+        "fuentes": [("winners", 3)],
+        "labels": ["", "", ""],
+    },
+}
 
 # Generos que se pueden pedir desde el medidor. Lista cerrada a proposito.
 DISCOVERY_GENRES = ["horror", "romance", "comedy", "thriller", "drama", "action"]
 
 
-def discover(raw_a, raw_b, genre=None):
+def discover(raw_a, raw_b, genre=None, skip=None, modo="discovery"):
     """
-    Tres peliculas que ninguno vio: las dos mejores del top 500 y la primera
-    de la lista de underseen.
+    Tres peliculas que ninguno vio, repartidas entre las fuentes del modo.
+
+    skip = slugs ya mostrados en rondas anteriores. Es lo que hace que el
+    boton de "mas recomendaciones" avance, sin llevar contadores.
 
     genre=None -> cualquier genero, y no hace falta abrir fichas durante el
                   barrido. Rapido.
     genre=x    -> hay que abrir la ficha de cada candidata. Mas lento.
     """
+    conf = DISCOVERY_MODES.get(modo)
+    if not conf:
+        raise ValueError("Modo desconocido.")
+
     a, b = _dos_usuarios(raw_a, raw_b)
+    ya = limpiar_skip(skip)
 
     want = None
     if genre:
@@ -712,32 +783,36 @@ def discover(raw_a, raw_b, genre=None):
             raise ValueError("Genero no disponible.")
         want = {genre}
 
-    def buscar(list_key, n, skip=None):
+    incierto = []
+
+    def buscar(list_key, n, extra=None):
         try:
-            return take_unwatched(list_key, a, b, want, n, skip)
+            return take_unwatched(list_key, a, b, want, n,
+                                  ya | (extra or set()), incierto)
         except Exception:
             return []
 
-    # Las dos primeras salen del mismo barrido, asi la segunda nunca repite
-    # a la primera. La tercera es otra lista, va en paralelo.
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        f_top = pool.submit(buscar, "top500", 2)
-        f_und = pool.submit(buscar, "underseen", 1)
-        top, under = f_top.result(), f_und.result()
+    fuentes = conf["fuentes"]
+    with ThreadPoolExecutor(max_workers=len(fuentes)) as pool:
+        futuros = [pool.submit(buscar, key, n) for key, n in fuentes]
+        resultados = [f.result() for f in futuros]
 
-    # Una misma pelicula puede estar en las dos listas. Si la de underseen
-    # ya salio arriba, se vuelve a buscar excluyendola. Solo pasa a veces,
-    # asi que no vale la pena pedir candidatas de mas por adelantado.
-    usados = {f["slug"] for f in top}
-    if under and under[0]["slug"] in usados:
-        under = buscar("underseen", 1, usados)
+    # Una misma pelicula puede estar en dos listas. Si una fuente devuelve algo
+    # que otra ya ocupo, se rebusca excluyendolo. Solo pasa a veces, asi que no
+    # vale la pena pedir candidatas de mas por adelantado.
+    films = []
+    usados = set()
+    for (key, n), encontradas in zip(fuentes, resultados):
+        limpias = [f for f in encontradas if f["slug"] not in usados]
+        if len(limpias) < n:
+            limpias = [f for f in buscar(key, n, usados) if f["slug"] not in usados]
+        hueco = limpias[:n]
+        usados.update(f["slug"] for f in hueco)
+        films.extend(hueco + [None] * (n - len(hueco)))
 
-    films = [
-        top[0] if len(top) > 0 else None,
-        top[1] if len(top) > 1 else None,
-        under[0] if under else None,
-    ]
-    return [{"label": DISCOVERY_LABELS[i], "film": films[i]} for i in range(3)]
+    etapas = [{"label": conf["labels"][i], "film": films[i]} for i in range(3)]
+    vacio = not any(e["film"] for e in etapas)
+    return {"stages": etapas, "incierto": bool(incierto) and vacio}
 
 
 # ─────────────────────────────────────────────────────────────
@@ -841,6 +916,7 @@ PAGE = r"""<!doctype html>
   .deck.halloween .rank{text-shadow:0 0 9px rgba(255,140,66,.55)}
 
   .deck.discovery{--acc:#a48ef2;--sc:#c0b1f7;--rule:#332f4d}
+  .deck.winners{--acc:#e0b955;--sc:#ecd08a;--rule:#3b3628}
 
   /* ── medidor de descubrimiento ──────────────────────────
      La barra es puro chiste visual: no mide nada. */
@@ -885,6 +961,9 @@ PAGE = r"""<!doctype html>
   .stop-none{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
   .disclaimer{font-family:var(--mono);font-size:11px;color:var(--dim);
               margin:24px 0 0;padding-top:14px;border-top:1px solid var(--rule)}
+  button.mas{margin-top:22px;padding:10px 16px;font-size:12.5px}
+  .pick button.mas{width:100%;margin-top:14px}
+  button.mas:disabled{opacity:.4;cursor:default;color:var(--dim)}
 
   .warn{color:var(--sc,var(--beam))}
 
@@ -998,17 +1077,19 @@ const PAGE_SIZE = 10;
 const AUTO_RANK = 80;          // arriba de esto, preguntamos antes de pedir ratings
 
 // Un modo pasa si la pelicula tiene AL MENOS UNO de estos generos (OR, no AND).
-// Descubrimiento no filtra la lista: solo agrega el medidor.
+// Los modos con medidor no filtran la lista: solo agregan el trio.
 const MODES = {
   valentine: { label:"Modo San Valentin",   genres:["romance"], boton:"\u2665 San Valentin" },
   halloween: { label:"Modo Halloween",      genres:["horror"],  boton:"\u25c8 Halloween" },
-  discovery: { label:"Modo Descubrimiento", genres:null,        boton:"\u25d0 Descubrimiento" }
+  discovery: { label:"Modo Descubrimiento", genres:null, medidor:true, boton:"\u25d0 Descubrimiento" },
+  winners:   { label:"Modo Premiadas",      genres:null, medidor:true, boton:"\u25c6 Premiadas" }
 };
 
 const DISC_GENRES = ["horror","romance","comedy","thriller","drama","action"];
 
 let state = { films: [], shown: 0, prov: {}, users: null, mode: null,
-              hasGenres: false, picks: {}, stages: {}, genre: null };
+              hasGenres: false, picks: {}, stages: {}, genre: null,
+              skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {} };
 
 const stars = r => {
   const full = Math.floor(r), half = r - full >= 0.25 && r - full < 0.75, up = r - full >= 0.75;
@@ -1042,7 +1123,8 @@ async function cross(){
   $("deck").innerHTML = "";
   $("gate").innerHTML = "";
   state = { films: [], shown: 0, prov: {}, users: null, mode: null,
-            hasGenres: false, picks: {}, stages: {}, genre: null };
+            hasGenres: false, picks: {}, stages: {}, genre: null,
+            skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {} };
   show("Leyendo los dos perfiles\u2026");
 
   try{
@@ -1112,7 +1194,7 @@ function visible(){
 function setMode(mode){
   state.mode = (state.mode === mode) ? null : mode;   // volver a tocar = apagar
   paint();
-  if(state.mode === "discovery") cargarStages();
+  if(state.mode && MODES[state.mode].medidor) cargarStages();
   else if(state.mode) cargarPick(state.mode);
 }
 
@@ -1134,9 +1216,9 @@ function paint(){
   };
 
   const conPick = state.mode && MODES[state.mode].genres;   // solo los de genero
-  const disc = state.mode === "discovery";
+  const disc = state.mode && MODES[state.mode].medidor;
   host.innerHTML = `
-    <div class="modes">${btn("valentine")}${btn("halloween")}${btn("discovery")}</div>
+    <div class="modes">${btn("valentine")}${btn("halloween")}${btn("discovery")}${btn("winners")}</div>
     <div class="deck ${state.mode || ""}">
       ${disc ? `<div class="disc">
                   <div class="meter" id="meter"></div>
@@ -1195,21 +1277,43 @@ function setGenre(g){
   cargarStages();
 }
 
-function claveGenero(){ return state.genre || "todos"; }
+function claveGenero(){ return `${state.mode}|${state.genre || "todos"}`; }
 
-async function cargarStages(){
+// mas=true pide la siguiente ronda en vez de reusar lo que ya se busco.
+async function cargarStages(mas){
   const clave = claveGenero();
-  if(state.stages[clave] !== undefined) return;   // ya la buscamos
-  state.stages[clave] = null;                     // marca "en curso"
+  if(!mas && state.stages[clave] !== undefined) return;
+  if(!state.skip[clave]) state.skip[clave] = [];
+
+  const previo = state.stages[clave];
+  state.stages[clave] = null;                 // en curso
+  pintarStages();
+
   try{
     const d = await post("/api/discover", {
-      a: state.users.a.user, b: state.users.b.user, genre: state.genre
+      a: state.users.a.user, b: state.users.b.user,
+      genre: state.genre, skip: state.skip[clave], modo: state.mode
     });
-    state.stages[clave] = d.stages;
+    const hayAlgo = d.stages.some(e => e.film);
+
+    if(d.incierto){
+      // El servidor no pudo preguntarle a Letterboxd si las vieron. No es lo
+      // mismo que "ya las vieron todas", y decirlo importa.
+      state.stages[clave] = previo !== undefined && previo !== null
+        ? previo
+        : { error: "Letterboxd no respondio a la verificacion. Prueba de nuevo en un momento." };
+    }else if(mas && !hayAlgo){
+      state.stages[clave] = previo;           // no vaciar la pantalla
+      state.agotado[clave] = true;
+    }else{
+      state.stages[clave] = d.stages;
+      d.stages.forEach(e => { if(e.film) state.skip[clave].push(e.film.slug); });
+    }
   }catch(e){
     state.stages[clave] = { error: e.message };
   }
-  if(state.mode === "discovery" && claveGenero() === clave) pintarStages();
+  if(state.mode && MODES[state.mode].medidor && claveGenero() === clave)
+    pintarStages();
 }
 
 function pintarStages(){
@@ -1246,23 +1350,50 @@ function pintarStages(){
     return `<div>${etiqueta}${cuerpo}</div>`;
   };
 
+  const agotado = state.agotado[claveGenero()];
+  const boton = agotado
+    ? `<button class="ghost mas" disabled>No hay mas por aca</button>`
+    : `<button class="ghost mas" id="masStages">Mas recomendaciones</button>`;
+
   box.innerHTML = `<div class="track"><i></i><i></i><i></i></div>
     <div class="stops">${s.map(col).join("")}</div>
+    ${boton}
     <p class="disclaimer">Probablemente ninguna la vieron.</p>`;
+
+  const b = $("masStages");
+  if(b) b.addEventListener("click", () => cargarStages(true));
 }
 
 // ── recomendacion del top 500 que ninguno vio ──
-async function cargarPick(mode){
-  if(state.picks[mode] !== undefined) return;      // ya la tenemos
+// mas=true pide la siguiente en vez de reusar la que ya se busco.
+async function cargarPick(mode, mas){
+  if(!mas && state.picks[mode] !== undefined) return;
+  if(!state.pickSkip[mode]) state.pickSkip[mode] = [];
+
+  const previo = state.picks[mode];
+  state.picks[mode] = undefined;
+  pintarPick(mode);                          // muestra "buscando"
+
   try{
     const d = await post("/api/pick", {
-      mode, a: state.users.a.user, b: state.users.b.user
+      mode, a: state.users.a.user, b: state.users.b.user,
+      skip: state.pickSkip[mode]
     });
-    state.picks[mode] = d.pick;                    // puede ser null
+    if(d.incierto){
+      state.picks[mode] = previo !== undefined
+        ? previo
+        : { error: "Letterboxd no respondio a la verificacion. Prueba de nuevo en un momento." };
+    }else if(mas && !d.pick){
+      state.picks[mode] = previo;            // no vaciar la tarjeta
+      state.pickAgotado[mode] = true;
+    }else{
+      state.picks[mode] = d.pick;            // puede ser null la primera vez
+      if(d.pick) state.pickSkip[mode].push(d.pick.slug);
+    }
   }catch(e){
     state.picks[mode] = { error: e.message };
   }
-  if(state.mode === mode) pintarPick(mode);        // por si cambio mientras buscaba
+  if(state.mode === mode) pintarPick(mode);  // por si cambio mientras buscaba
 }
 
 function pintarPick(mode){
@@ -1289,13 +1420,22 @@ function pintarPick(mode){
   }
 
   const gen = (p.genres || []).map(g => esc(g.replace(/-/g," "))).join(", ");
+  const agotado = state.pickAgotado[mode];
+  const boton = agotado
+    ? `<button class="ghost mas" disabled>No hay mas</button>`
+    : `<button class="ghost mas" id="masPick">Otra recomendacion</button>`;
+
   box.innerHTML = `<h4>${titulo}</h4>
     ${p.poster ? `<img src="${esc(p.poster)}" alt="" loading="lazy">` : ""}
     <p class="pt"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc(p.title)}</a></p>
     <p class="pm">${p.year || ""}${gen ? " \u00b7 " + gen : ""}</p>
     <p class="pr">${p.rating ? p.rating.toFixed(2) : "\u2014"}</p>
     <p class="pw">Puesto ${p.rank} del top 500 de Letterboxd. Probablemente
-       ninguno de los dos la vio.</p>`;
+       ninguno de los dos la vio.</p>
+    ${boton}`;
+
+  const b = $("masPick");
+  if(b) b.addEventListener("click", () => cargarPick(mode, true));
 }
 
 function renderTally(d){
@@ -1427,11 +1567,13 @@ class Handler(BaseHTTPRequestHandler):
             elif self.path == "/api/rank":
                 self._json(200, rank(payload.get("slugs")))
             elif self.path == "/api/pick":
-                self._json(200, {"pick": pick_recommendation(
-                    payload.get("mode"), payload.get("a"), payload.get("b"))})
+                self._json(200, pick_recommendation(
+                    payload.get("mode"), payload.get("a"), payload.get("b"),
+                    payload.get("skip")))
             elif self.path == "/api/discover":
-                self._json(200, {"stages": discover(
-                    payload.get("a"), payload.get("b"), payload.get("genre"))})
+                self._json(200, discover(
+                    payload.get("a"), payload.get("b"), payload.get("genre"),
+                    payload.get("skip"), payload.get("modo") or "discovery"))
             else:
                 self._json(404, {"error": "Ruta desconocida."})
         except ValueError as e:
