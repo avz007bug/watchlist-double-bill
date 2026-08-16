@@ -774,7 +774,8 @@ DISCOVERY_MODES = {
 }
 
 # Generos que se pueden pedir desde el medidor. Lista cerrada a proposito.
-DISCOVERY_GENRES = ["horror", "romance", "comedy", "thriller", "drama", "action"]
+DISCOVERY_GENRES = ["horror", "romance", "comedy", "thriller", "drama", "action",
+                    "science-fiction", "war"]
 
 
 def discover(raw_a, raw_b, genre=None, skip=None, modo="discovery"):
@@ -935,6 +936,11 @@ PAGE = r"""<!doctype html>
 
   .deck.discovery{--acc:#a48ef2;--sc:#c0b1f7;--rule:#332f4d}
   .deck.winners{--acc:#e0b955;--sc:#ecd08a;--rule:#3b3628}
+  .deck.winners::before{opacity:1;
+    background:radial-gradient(120% 100% at 22% 0%, rgba(224,185,85,.12), transparent 62%)}
+
+  .disc-titulo{font-family:var(--mono);font-size:11px;letter-spacing:.13em;
+               text-transform:uppercase;color:var(--acc);margin:0 0 16px}
 
   /* ── medidor de descubrimiento ──────────────────────────
      La barra es puro chiste visual: no mide nada. */
@@ -1100,10 +1106,17 @@ const MODES = {
   valentine: { label:"Modo San Valentin",   genres:["romance"], boton:"\u2665 San Valentin" },
   halloween: { label:"Modo Halloween",      genres:["horror"],  boton:"\u25c8 Halloween" },
   discovery: { label:"Modo Descubrimiento", genres:null, medidor:true, boton:"\u25d0 Descubrimiento" },
-  winners:   { label:"Modo Premiadas",      genres:null, medidor:true, boton:"\u25c6 Premiadas" }
+  winners:   { label:"Modo Premiadas",      genres:null, medidor:true, boton:"\uD83C\uDFC6 Premiadas",
+               titulo:"Ganadoras a Mejor Pelicula: Oscar's \u00b7 Cannes \u00b7 BAFTA" }
 };
 
-const DISC_GENRES = ["horror","romance","comedy","thriller","drama","action"];
+// El slug es lo que entiende Letterboxd; el texto es lo que se ve en el boton.
+const DISC_GENRES = [
+  ["horror","horror"], ["romance","romance"], ["comedy","comedy"],
+  ["thriller","thriller"], ["drama","drama"], ["action","action"],
+  ["science-fiction","sci-fi"], ["war","war"]
+];
+const nombreGenero = g => (DISC_GENRES.find(x => x[0] === g) || [g, g])[1];
 
 let state = { films: [], shown: 0, prov: {}, users: null, mode: null,
               hasGenres: false, picks: {}, stages: {}, genre: null,
@@ -1239,7 +1252,11 @@ function paint(){
     <div class="modes">${btn("valentine")}${btn("halloween")}${btn("discovery")}${btn("winners")}</div>
     <div class="deck ${state.mode || ""}">
       ${disc ? `<div class="disc">
-                  <div class="meter" id="meter"></div>
+                  <div>
+                    ${MODES[state.mode].titulo
+                      ? `<p class="disc-titulo">${esc(MODES[state.mode].titulo)}</p>` : ""}
+                    <div class="meter" id="meter"></div>
+                  </div>
                   <aside class="genres" id="genres"></aside>
                 </div>` : ""}
       <div class="${conPick ? "split" : ""}">
@@ -1253,8 +1270,8 @@ function paint(){
 
   if(disc){
     const caja = $("genres");
-    caja.innerHTML = `<p>Genero</p>` + DISC_GENRES.map(g =>
-      `<button class="gbtn" data-g="${g}" aria-pressed="${state.genre === g}">${g}</button>`
+    caja.innerHTML = `<p>Genero</p>` + DISC_GENRES.map(([g, txt]) =>
+      `<button class="gbtn" data-g="${g}" aria-pressed="${state.genre === g}">${txt}</button>`
     ).join("");
     caja.querySelectorAll(".gbtn").forEach(b =>
       b.addEventListener("click", () => setGenre(b.dataset.g)));
@@ -1273,9 +1290,11 @@ function paint(){
   if(conPick) pintarPick(state.mode);
 
   if(state.films.length === 0){
+    const mismo = state.users && state.users.same;
     cards.insertAdjacentHTML("beforeend",
-      `<p class="empty">No hay ranking que mostrar, pero el modo Descubrimiento
-       funciona igual: no depende de lo que tengan en comun.</p>`);
+      `<p class="empty">${mismo
+        ? "Con un solo perfil no hay cruce ni ranking, pero Descubrimiento y Premiadas funcionan igual."
+        : "No hay ranking que mostrar, pero el modo Descubrimiento funciona igual: no depende de lo que tengan en comun."}</p>`);
     return;
   }
   if(list.length === 0){
@@ -1340,7 +1359,7 @@ function pintarStages(){
   const s = state.stages[claveGenero()];
 
   if(s === undefined || s === null){
-    const que = state.genre ? `peliculas de ${state.genre}` : "el medidor";
+    const que = state.genre ? `peliculas de ${nombreGenero(state.genre)}` : "el medidor";
     box.innerHTML = `<div class="track"><i></i><i></i><i></i></div>
       <p class="stop-none">Buscando ${esc(que)}\u2026</p>`;
     return;
@@ -1354,7 +1373,7 @@ function pintarStages(){
     const f = e.film;
     const cuerpo = !f
       ? `<p class="stop-none">${state.genre
-           ? "Nada de " + esc(state.genre) + " por aca." : "Ya vieron todo aca."}</p>`
+           ? "Nada de " + esc(nombreGenero(state.genre)) + " por aca." : "Ya vieron todo aca."}</p>`
       : `<div class="stop-film">
            ${f.poster ? `<img src="${esc(f.poster)}" alt="" loading="lazy">` : ""}
            <div class="st"><a href="${esc(f.url)}" target="_blank" rel="noopener">${esc(f.title)}</a></div>
