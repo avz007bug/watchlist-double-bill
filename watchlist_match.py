@@ -775,7 +775,7 @@ DISCOVERY_MODES = {
 
 # Generos que se pueden pedir desde el medidor. Lista cerrada a proposito.
 DISCOVERY_GENRES = ["horror", "romance", "comedy", "thriller", "drama", "action",
-                    "science-fiction", "war"]
+                    "science-fiction", "war", "animation"]
 
 
 def discover(raw_a, raw_b, genre=None, skip=None, modo="discovery"):
@@ -985,8 +985,12 @@ PAGE = r"""<!doctype html>
   .stop-none{font-family:var(--mono);font-size:11.5px;color:var(--dim)}
   .disclaimer{font-family:var(--mono);font-size:11px;color:var(--dim);
               margin:24px 0 0;padding-top:14px;border-top:1px solid var(--rule)}
-  button.mas{margin-top:22px;padding:10px 16px;font-size:12.5px}
-  .pick button.mas{width:100%;margin-top:14px}
+  .mas-row{display:flex;gap:8px;align-items:center;margin-top:22px;flex-wrap:wrap}
+  .mas-row .ronda{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  button.mas{margin-top:0;padding:10px 16px;font-size:12.5px}
+  .pick .mas-row{margin-top:14px;gap:6px}
+  .pick button.mas{flex:1;padding:9px 8px;font-size:12px}
+  .pick #atrasPick{flex:0 0 38px}
   button.mas:disabled{opacity:.4;cursor:default;color:var(--dim)}
 
   .warn{color:var(--sc,var(--beam))}
@@ -1114,13 +1118,14 @@ const MODES = {
 const DISC_GENRES = [
   ["horror","horror"], ["romance","romance"], ["comedy","comedy"],
   ["thriller","thriller"], ["drama","drama"], ["action","action"],
-  ["science-fiction","sci-fi"], ["war","war"]
+  ["science-fiction","sci-fi"], ["war","war"], ["animation","animation"]
 ];
 const nombreGenero = g => (DISC_GENRES.find(x => x[0] === g) || [g, g])[1];
 
 let state = { films: [], shown: 0, prov: {}, users: null, mode: null,
               hasGenres: false, picks: {}, stages: {}, genre: null,
-              skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {} };
+              skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {},
+              hist: {}, idx: {}, pickHist: {}, pickIdx: {} };
 
 const stars = r => {
   const full = Math.floor(r), half = r - full >= 0.25 && r - full < 0.75, up = r - full >= 0.75;
@@ -1155,7 +1160,8 @@ async function cross(){
   $("gate").innerHTML = "";
   state = { films: [], shown: 0, prov: {}, users: null, mode: null,
             hasGenres: false, picks: {}, stages: {}, genre: null,
-            skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {} };
+            skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {},
+            hist: {}, idx: {}, pickHist: {}, pickIdx: {} };
   show("Leyendo los dos perfiles\u2026");
 
   try{
@@ -1317,13 +1323,31 @@ function setGenre(g){
 function claveGenero(){ return `${state.mode}|${state.genre || "todos"}`; }
 
 // mas=true pide la siguiente ronda en vez de reusar lo que ya se busco.
-async function cargarStages(mas){
+// dir: undefined = primera carga | 1 = siguiente | -1 = anterior
+// Las rondas ya vistas se guardan, asi que retroceder (y volver a avanzar
+// sobre lo ya visto) no cuesta ninguna peticion.
+async function cargarStages(dir){
   const clave = claveGenero();
-  if(!mas && state.stages[clave] !== undefined) return;
-  if(!state.skip[clave]) state.skip[clave] = [];
+  if(!state.hist[clave]){
+    state.hist[clave] = [];
+    state.idx[clave] = -1;
+    state.skip[clave] = [];
+  }
+  const h = state.hist[clave];
 
-  const previo = state.stages[clave];
-  state.stages[clave] = null;                 // en curso
+  if(dir === -1){                              // atras: siempre desde memoria
+    if(state.idx[clave] > 0){ state.idx[clave]--; pintarStages(); }
+    return;
+  }
+  if(dir === 1 && state.idx[clave] < h.length - 1){
+    state.idx[clave]++;                        // adelante sobre lo ya cargado
+    pintarStages();
+    return;
+  }
+  if(dir === undefined && h.length){ pintarStages(); return; }
+
+  // Aqui si hace falta una ronda nueva.
+  state.stages[clave] = null;                  // en curso
   pintarStages();
 
   try{
@@ -1336,14 +1360,16 @@ async function cargarStages(mas){
     if(d.incierto){
       // El servidor no pudo preguntarle a Letterboxd si las vieron. No es lo
       // mismo que "ya las vieron todas", y decirlo importa.
-      state.stages[clave] = previo !== undefined && previo !== null
-        ? previo
+      state.stages[clave] = h.length
+        ? undefined
         : { error: "Letterboxd no respondio a la verificacion. Prueba de nuevo en un momento." };
-    }else if(mas && !hayAlgo){
-      state.stages[clave] = previo;           // no vaciar la pantalla
-      state.agotado[clave] = true;
+    }else if(!hayAlgo){
+      state.agotado[clave] = true;             // no vaciar lo que ya se ve
+      state.stages[clave] = undefined;
     }else{
-      state.stages[clave] = d.stages;
+      h.push(d.stages);
+      state.idx[clave] = h.length - 1;
+      state.stages[clave] = undefined;         // manda el historial
       d.stages.forEach(e => { if(e.film) state.skip[clave].push(e.film.slug); });
     }
   }catch(e){
@@ -1356,7 +1382,12 @@ async function cargarStages(mas){
 function pintarStages(){
   const box = $("meter");
   if(!box) return;
-  const s = state.stages[claveGenero()];
+  const clave = claveGenero();
+  const h = state.hist[clave] || [];
+  const i = state.idx[clave];
+  // Si hay historial, manda el historial; state.stages solo lleva error o carga.
+  const s = (h.length && i >= 0 && state.stages[clave] === undefined)
+    ? h[i] : state.stages[clave];
 
   if(s === undefined || s === null){
     const que = state.genre ? `peliculas de ${nombreGenero(state.genre)}` : "el medidor";
@@ -1387,29 +1418,49 @@ function pintarStages(){
     return `<div>${etiqueta}${cuerpo}</div>`;
   };
 
-  const agotado = state.agotado[claveGenero()];
-  const boton = agotado
-    ? `<button class="ghost mas" disabled>No hay mas por aca</button>`
-    : `<button class="ghost mas" id="masStages">Mas recomendaciones</button>`;
+  // Atras solo se habilita si hay rondas guardadas detras: nunca pide nada.
+  const hayAtras = i > 0;
+  const agotado = state.agotado[clave] && i >= h.length - 1;
+  const ronda = h.length ? `<span class="ronda">${i + 1} de ${h.length}</span>` : "";
 
   box.innerHTML = `<div class="track"><i></i><i></i><i></i></div>
     <div class="stops">${s.map(col).join("")}</div>
-    ${boton}
+    <div class="mas-row">
+      <button class="ghost mas" id="atrasStages" ${hayAtras ? "" : "disabled"}>
+        \u2190 Anteriores</button>
+      <button class="ghost mas" id="masStages" ${agotado ? "disabled" : ""}>
+        ${agotado ? "No hay mas por aca" : "Mas recomendaciones \u2192"}</button>
+      ${ronda}
+    </div>
     <p class="disclaimer">Probablemente ninguna la vieron.</p>`;
 
-  const b = $("masStages");
-  if(b) b.addEventListener("click", () => cargarStages(true));
+  const bA = $("atrasStages");
+  if(bA) bA.addEventListener("click", () => cargarStages(-1));
+  const bM = $("masStages");
+  if(bM) bM.addEventListener("click", () => cargarStages(1));
 }
 
 // ── recomendacion del top 500 que ninguno vio ──
 // mas=true pide la siguiente en vez de reusar la que ya se busco.
-async function cargarPick(mode, mas){
-  if(!mas && state.picks[mode] !== undefined) return;
+// dir: undefined = primera carga | 1 = siguiente | -1 = anterior
+async function cargarPick(mode, dir){
+  const h = state.pickHist[mode] || (state.pickHist[mode] = []);
   if(!state.pickSkip[mode]) state.pickSkip[mode] = [];
+  if(state.pickIdx[mode] === undefined) state.pickIdx[mode] = -1;
 
-  const previo = state.picks[mode];
-  state.picks[mode] = undefined;
-  pintarPick(mode);                          // muestra "buscando"
+  if(dir === -1){                              // atras: siempre desde memoria
+    if(state.pickIdx[mode] > 0){ state.pickIdx[mode]--; pintarPick(mode); }
+    return;
+  }
+  if(dir === 1 && state.pickIdx[mode] < h.length - 1){
+    state.pickIdx[mode]++;
+    pintarPick(mode);
+    return;
+  }
+  if(dir === undefined && h.length){ pintarPick(mode); return; }
+
+  state.picks[mode] = null;                    // en curso
+  pintarPick(mode);
 
   try{
     const d = await post("/api/pick", {
@@ -1417,27 +1468,33 @@ async function cargarPick(mode, mas){
       skip: state.pickSkip[mode]
     });
     if(d.incierto){
-      state.picks[mode] = previo !== undefined
-        ? previo
+      state.picks[mode] = h.length
+        ? undefined
         : { error: "Letterboxd no respondio a la verificacion. Prueba de nuevo en un momento." };
-    }else if(mas && !d.pick){
-      state.picks[mode] = previo;            // no vaciar la tarjeta
+    }else if(!d.pick){
       state.pickAgotado[mode] = true;
+      state.picks[mode] = h.length ? undefined : null;
     }else{
-      state.picks[mode] = d.pick;            // puede ser null la primera vez
-      if(d.pick) state.pickSkip[mode].push(d.pick.slug);
+      h.push(d.pick);
+      state.pickIdx[mode] = h.length - 1;
+      state.picks[mode] = undefined;
+      state.pickSkip[mode].push(d.pick.slug);
     }
   }catch(e){
     state.picks[mode] = { error: e.message };
   }
-  if(state.mode === mode) pintarPick(mode);  // por si cambio mientras buscaba
+  if(state.mode === mode) pintarPick(mode);
+
 }
 
 function pintarPick(mode){
   const box = $("pick");
   if(!box) return;
   const titulo = "Para esta noche";
-  const p = state.picks[mode];
+  const h = state.pickHist[mode] || [];
+  const i = state.pickIdx[mode];
+  const p = (h.length && i >= 0 && state.picks[mode] === undefined)
+    ? h[i] : state.picks[mode];
 
   if(p === undefined){
     box.innerHTML = `<h4>${titulo}</h4>
@@ -1457,10 +1514,13 @@ function pintarPick(mode){
   }
 
   const gen = (p.genres || []).map(g => esc(g.replace(/-/g," "))).join(", ");
-  const agotado = state.pickAgotado[mode];
-  const boton = agotado
-    ? `<button class="ghost mas" disabled>No hay mas</button>`
-    : `<button class="ghost mas" id="masPick">Otra recomendacion</button>`;
+  const hayAtras = i > 0;
+  const agotado = state.pickAgotado[mode] && i >= h.length - 1;
+  const boton = `<div class="mas-row">
+      <button class="ghost mas" id="atrasPick" ${hayAtras ? "" : "disabled"}>\u2190</button>
+      <button class="ghost mas" id="masPick" ${agotado ? "disabled" : ""}>
+        ${agotado ? "No hay mas" : "Otra \u2192"}</button>
+    </div>`;
 
   box.innerHTML = `<h4>${titulo}</h4>
     ${p.poster ? `<img src="${esc(p.poster)}" alt="" loading="lazy">` : ""}
@@ -1471,8 +1531,10 @@ function pintarPick(mode){
        ninguno de los dos la vio.</p>
     ${boton}`;
 
-  const b = $("masPick");
-  if(b) b.addEventListener("click", () => cargarPick(mode, true));
+  const bA = $("atrasPick");
+  if(bA) bA.addEventListener("click", () => cargarPick(mode, -1));
+  const bM = $("masPick");
+  if(bM) bM.addEventListener("click", () => cargarPick(mode, 1));
 }
 
 function renderTally(d){
