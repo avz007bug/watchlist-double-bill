@@ -883,12 +883,12 @@ PAGE = r"""<!doctype html>
      line-height:1.02;margin:0 0 12px}
   .lede{color:var(--dim);max-width:46ch;margin:0 0 40px}
 
-  .bill{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:start}
+  .bill{display:grid;grid-template-columns:1fr 112px 1fr;gap:14px;align-items:start}
   .amp{font-family:var(--serif);font-style:italic;font-size:44px;color:var(--signal);
        line-height:1;padding-top:4px;user-select:none}
-  .mid{position:relative;display:flex;flex-direction:column;align-items:center}
-  .hint{position:absolute;top:54px;left:50%;transform:translateX(-50%);
-        white-space:nowrap;font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .mid{display:flex;flex-direction:column;align-items:center}
+  .hint{margin-top:8px;white-space:nowrap;text-align:center;
+        font-family:var(--mono);font-size:11px;color:var(--dim)}
   input[type=text]{width:100%;background:var(--panel);border:1px solid var(--edge);
         color:var(--bone);border-radius:3px;padding:13px 14px;font-family:var(--mono);
         font-size:13px;transition:border-color .15s}
@@ -1080,7 +1080,7 @@ PAGE = r"""<!doctype html>
   @media (max-width:560px){
     .bill{grid-template-columns:1fr;gap:8px}
     .amp{text-align:center;font-size:34px;padding:0}
-    .hint{position:static;transform:none;margin-top:2px}
+    .hint{margin-top:2px}
     li{grid-template-columns:26px 40px 1fr auto;gap:11px}
   }
   @media (prefers-reduced-motion:reduce){
@@ -1139,7 +1139,8 @@ const AUTO_RANK = 80;          // arriba de esto, preguntamos antes de pedir rat
 const MODES = {
   valentine: { label:"Modo San Valentin",   genres:["romance"], boton:"\u2665 San Valentin" },
   halloween: { label:"Modo Halloween",      genres:["horror"],  boton:"\u25c8 Halloween" },
-  discovery: { label:"Modo Descubrimiento", genres:null, medidor:true, boton:"\u25d0 Descubrimiento" },
+  discovery: { label:"Modo Descubrimiento", genres:null, medidor:true, boton:"\u25d0 Descubrimiento",
+               titulo:"Top all-time por Letterboxd" },
   winners:   { label:"Modo Premiadas",      genres:null, medidor:true, boton:"\uD83C\uDFC6 Premiadas",
                titulo:"Ganadoras a Mejor Pelicula: Oscar's \u00b7 Cannes \u00b7 BAFTA" },
   siglo21:   { label:"Modo Siglo XXI",      genres:null, medidor:true, boton:"\u25c9 Siglo XXI",
