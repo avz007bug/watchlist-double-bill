@@ -82,6 +82,12 @@ LISTS = {
         ],
         "pages": 2,
     },
+    # Peliculas modernas mejor puntuadas en IMDb, lista propia.
+    # 10 paginas = hasta 1000 titulos. Si la lista es mas corta, para sola.
+    "modern": {
+        "urls": ["https://letterboxd.com/alvarovadilloz/list/imdb-top-modern-films/"],
+        "pages": 10,
+    },
 }
 SCAN_CHUNK = 25         # cuantas fichas abrimos por tanda antes de volver a evaluar
 MAX_SCAN = 250          # techo de fichas a revisar antes de rendirse
@@ -709,8 +715,10 @@ def take_unwatched(list_key, a, b, want=None, n=1, skip=None, incierto=None):
             revisadas += 1
             if want and not (set(f.get("genres") or []) & want):
                 continue
-            if (has_watched(a, f["slug"], incierto)
-                    or has_watched(b, f["slug"], incierto)):
+            # Sin perfil no hay a quien preguntarle: se ofrecen todas.
+            if a and has_watched(a, f["slug"], incierto):
+                continue
+            if b and has_watched(b, f["slug"], incierto):
                 continue
             completa = f if want else fetch_film(f["slug"])
             encontradas.append({**completa, "rank": posicion, "scanned": revisadas})
@@ -731,10 +739,14 @@ def first_unwatched(list_key, a, b, want=None, skip=None, incierto=None):
     return r[0] if r else None
 
 
-def _dos_usuarios(raw_a, raw_b):
+def _dos_usuarios(raw_a, raw_b, obligatorio=True):
+    """
+    Devuelve (a, b). Si obligatorio=False acepta que no haya perfiles: es el
+    caso "no tengo Letterboxd", donde no hay a quien preguntarle si la vio.
+    """
     a = parse_username(raw_a)
     b = parse_username(raw_b)
-    if not a or not b:
+    if obligatorio and (not a or not b):
         raise ValueError("Perfiles invalidos.")
     return a, b
 
@@ -752,7 +764,7 @@ def pick_recommendation(mode, raw_a, raw_b, skip=None):
     want = MODE_GENRES.get(mode)
     if not want:
         raise ValueError("Modo desconocido.")
-    a, b = _dos_usuarios(raw_a, raw_b)
+    a, b = _dos_usuarios(raw_a, raw_b, obligatorio=False)
     incierto = []
     pick = first_unwatched("top500", a, b, want, limpiar_skip(skip), incierto)
     # Si no hay resultado pero hubo consultas sin resolver, no es que ya las
@@ -769,6 +781,10 @@ DISCOVERY_MODES = {
     },
     "winners": {
         "fuentes": [("winners", 3)],
+        "labels": ["", "", ""],
+    },
+    "siglo21": {
+        "fuentes": [("modern", 3)],
         "labels": ["", "", ""],
     },
 }
@@ -793,7 +809,7 @@ def discover(raw_a, raw_b, genre=None, skip=None, modo="discovery"):
     if not conf:
         raise ValueError("Modo desconocido.")
 
-    a, b = _dos_usuarios(raw_a, raw_b)
+    a, b = _dos_usuarios(raw_a, raw_b, obligatorio=False)
     ya = limpiar_skip(skip)
 
     want = None
@@ -870,6 +886,9 @@ PAGE = r"""<!doctype html>
   .bill{display:grid;grid-template-columns:1fr auto 1fr;gap:14px;align-items:start}
   .amp{font-family:var(--serif);font-style:italic;font-size:44px;color:var(--signal);
        line-height:1;padding-top:4px;user-select:none}
+  .mid{position:relative;display:flex;flex-direction:column;align-items:center}
+  .hint{position:absolute;top:54px;left:50%;transform:translateX(-50%);
+        white-space:nowrap;font-family:var(--mono);font-size:11px;color:var(--dim)}
   input[type=text]{width:100%;background:var(--panel);border:1px solid var(--edge);
         color:var(--bone);border-radius:3px;padding:13px 14px;font-family:var(--mono);
         font-size:13px;transition:border-color .15s}
@@ -893,6 +912,7 @@ PAGE = r"""<!doctype html>
   button.ghost:hover:not(:disabled){background:var(--panel);filter:none}
 
   .note{margin-top:14px;font-size:12.5px;color:var(--dim)}
+  button.sinlb{margin-top:9px;padding:11px;font-size:12.5px}
   .status{margin-top:28px;font-family:var(--mono);font-size:12.5px;color:var(--beam);
           min-height:19px}
   .status.err{color:var(--signal)}
@@ -938,6 +958,10 @@ PAGE = r"""<!doctype html>
   .deck.winners{--acc:#e0b955;--sc:#ecd08a;--rule:#3b3628}
   .deck.winners::before{opacity:1;
     background:radial-gradient(120% 100% at 22% 0%, rgba(224,185,85,.12), transparent 62%)}
+
+  .deck.siglo21{--acc:#5fb0e0;--sc:#9ad0f0;--rule:#28374a}
+  .deck.siglo21::before{opacity:1;
+    background:radial-gradient(120% 100% at 22% 0%, rgba(95,176,224,.11), transparent 62%)}
 
   .disc-titulo{font-family:var(--mono);font-size:11px;letter-spacing:.13em;
                text-transform:uppercase;color:var(--acc);margin:0 0 16px}
@@ -1056,6 +1080,7 @@ PAGE = r"""<!doctype html>
   @media (max-width:560px){
     .bill{grid-template-columns:1fr;gap:8px}
     .amp{text-align:center;font-size:34px;padding:0}
+    .hint{position:static;transform:none;margin-top:2px}
     li{grid-template-columns:26px 40px 1fr auto;gap:11px}
   }
   @media (prefers-reduced-motion:reduce){
@@ -1074,18 +1099,23 @@ PAGE = r"""<!doctype html>
 
   <div class="bill">
     <div>
-      <input type="text" id="a" placeholder="letterboxd.com/usuario" autocomplete="off" spellcheck="false">
-      <label class="opt"><input type="checkbox" id="seenA"> Agregar sus vistas recientes</label>
+      <input type="text" id="a" placeholder="usuario" autocomplete="off" spellcheck="false">
+      <label class="opt"><input type="checkbox" id="seenA"> Agregar vistas recientes</label>
     </div>
-    <span class="amp" aria-hidden="true">&amp;</span>
+    <div class="mid">
+      <span class="amp" aria-hidden="true">&amp;</span>
+      <span class="hint">&iquest;alguno repite?</span>
+    </div>
     <div>
-      <input type="text" id="b" placeholder="letterboxd.com/otro-usuario" autocomplete="off" spellcheck="false">
-      <label class="opt"><input type="checkbox" id="seenB"> Agregar sus vistas recientes</label>
+      <input type="text" id="b" placeholder="otro usuario" autocomplete="off" spellcheck="false">
+      <label class="opt"><input type="checkbox" id="seenB"> Agregar vistas recientes</label>
     </div>
   </div>
   <button id="go">Match watchlists</button>
-  <p class="note">Solo funciona con perfiles publicos. De las peliculas ya vistas solo se
-     puede leer la actividad reciente, no el historial completo.</p>
+  <button class="ghost sinlb" id="sinCuenta">No tengo Letterboxd</button>
+  <p class="note">Basta el nombre de usuario; tambien vale pegar el link del perfil.
+     Solo funciona con perfiles publicos, y de las peliculas ya vistas solo se puede
+     leer la actividad reciente.</p>
 
   <p class="status" id="status" role="status" aria-live="polite"></p>
   <div id="gate"></div>
@@ -1111,7 +1141,9 @@ const MODES = {
   halloween: { label:"Modo Halloween",      genres:["horror"],  boton:"\u25c8 Halloween" },
   discovery: { label:"Modo Descubrimiento", genres:null, medidor:true, boton:"\u25d0 Descubrimiento" },
   winners:   { label:"Modo Premiadas",      genres:null, medidor:true, boton:"\uD83C\uDFC6 Premiadas",
-               titulo:"Ganadoras a Mejor Pelicula: Oscar's \u00b7 Cannes \u00b7 BAFTA" }
+               titulo:"Ganadoras a Mejor Pelicula: Oscar's \u00b7 Cannes \u00b7 BAFTA" },
+  siglo21:   { label:"Modo Siglo XXI",      genres:null, medidor:true, boton:"\u25c9 Siglo XXI",
+               titulo:"Las mejor puntuadas en IMDb de este siglo" }
 };
 
 // El slug es lo que entiende Letterboxd; el texto es lo que se ve en el boton.
@@ -1125,7 +1157,7 @@ const nombreGenero = g => (DISC_GENRES.find(x => x[0] === g) || [g, g])[1];
 let state = { films: [], shown: 0, prov: {}, users: null, mode: null,
               hasGenres: false, picks: {}, stages: {}, genre: null,
               skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {},
-              hist: {}, idx: {}, pickHist: {}, pickIdx: {} };
+              hist: {}, idx: {}, pickHist: {}, pickIdx: {}, sinCuenta: false };
 
 const stars = r => {
   const full = Math.floor(r), half = r - full >= 0.25 && r - full < 0.75, up = r - full >= 0.75;
@@ -1161,7 +1193,7 @@ async function cross(){
   state = { films: [], shown: 0, prov: {}, users: null, mode: null,
             hasGenres: false, picks: {}, stages: {}, genre: null,
             skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {},
-            hist: {}, idx: {}, pickHist: {}, pickIdx: {} };
+            hist: {}, idx: {}, pickHist: {}, pickIdx: {}, sinCuenta: false };
   show("Leyendo los dos perfiles\u2026");
 
   try{
@@ -1255,7 +1287,10 @@ function paint(){
   const conPick = state.mode && MODES[state.mode].genres;   // solo los de genero
   const disc = state.mode && MODES[state.mode].medidor;
   host.innerHTML = `
-    <div class="modes">${btn("valentine")}${btn("halloween")}${btn("discovery")}${btn("winners")}</div>
+    <div class="modes">${
+      (state.sinCuenta ? ["discovery","winners","siglo21"]
+                       : ["valentine","halloween","discovery","winners","siglo21"]).map(btn).join("")
+    }</div>
     <div class="deck ${state.mode || ""}">
       ${disc ? `<div class="disc">
                   <div>
@@ -1432,7 +1467,9 @@ function pintarStages(){
         ${agotado ? "No hay mas por aca" : "Mas recomendaciones \u2192"}</button>
       ${ronda}
     </div>
-    <p class="disclaimer">Probablemente ninguna la vieron.</p>`;
+    <p class="disclaimer">${state.sinCuenta
+      ? "Sin perfiles no se puede saber que ya vieron: estas son las mejor valoradas."
+      : "Probablemente ninguna la vieron."}</p>`;
 
   const bA = $("atrasStages");
   if(bA) bA.addEventListener("click", () => cargarStages(-1));
@@ -1610,6 +1647,21 @@ function more(){
   }
 }
 
+// Sin perfiles no hay watchlist que cruzar, pero las listas publicas y las
+// recomendaciones funcionan igual: se entra directo al medidor.
+function sinCuenta(){
+  state = { films: [], shown: 0, prov: {}, users: { a:{user:""}, b:{user:""} },
+            mode: null, hasGenres: false, picks: {}, stages: {}, genre: null,
+            skip: {}, agotado: {}, pickSkip: {}, pickAgotado: {},
+            hist: {}, idx: {}, pickHist: {}, pickIdx: {}, sinCuenta: true };
+  $("out").innerHTML = "";
+  $("gate").innerHTML = "";
+  show("");
+  paint();
+  setMode("discovery");
+}
+
+$("sinCuenta").addEventListener("click", sinCuenta);
 $("go").addEventListener("click", cross);
 ["a","b"].forEach(id => $(id).addEventListener("keydown", e => { if(e.key==="Enter") cross(); }));
 </script>
