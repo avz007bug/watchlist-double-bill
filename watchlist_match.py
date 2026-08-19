@@ -65,13 +65,20 @@ RATE_MAX = 60           # peticiones por ventana y por IP. Cada accion cuenta:
 # En produccion NO se descargan: se leen de la semilla. Los links solo se usan
 # al correr --warm.
 LISTS = {
+    # Solo para las tarjetas de San Valentin y Halloween.
     "top500": {
         "urls": ["https://letterboxd.com/dave/list/letterboxd-top-500-films-history-collected/"],
         "pages": 7,
     },
-    "underseen": {
-        "urls": ["https://letterboxd.com/official/list/top-100-underseen-films/"],
-        "pages": 2,
+    # Descubrimiento: el top all-time y las underseen en una sola bolsa.
+    # slugs_de_lista ya quita repetidas y ordena por rating, asi que las tres
+    # recomendaciones salen por merito y no por cuota de cada lista.
+    "alltime": {
+        "urls": [
+            "https://letterboxd.com/dave/list/letterboxd-top-500-films-history-collected/",
+            "https://letterboxd.com/official/list/top-100-underseen-films/",
+        ],
+        "pages": 7,
     },
     # Premiadas: Palma de Oro + BAFTA mejor pelicula + Oscar mejor pelicula.
     "winners": {
@@ -776,8 +783,8 @@ def pick_recommendation(mode, raw_a, raw_b, skip=None):
 # listas. "winners" es identico a "discovery" salvo que bebe de una sola fuente.
 DISCOVERY_MODES = {
     "discovery": {
-        "fuentes": [("top500", 2), ("underseen", 1)],
-        "labels": ["\u00bfa\u00fan?", "", "joder \U0001F6AC"],
+        "fuentes": [("alltime", 3)],
+        "labels": ["", "", ""],
     },
     "winners": {
         "fuentes": [("winners", 3)],
@@ -1140,7 +1147,7 @@ const MODES = {
   valentine: { label:"Modo San Valentin",   genres:["romance"], boton:"\u2665 San Valentin" },
   halloween: { label:"Modo Halloween",      genres:["horror"],  boton:"\u25c8 Halloween" },
   discovery: { label:"Modo Descubrimiento", genres:null, medidor:true, boton:"\u25d0 Descubrimiento",
-               titulo:"Top all-time por Letterboxd" },
+               titulo:"Top all-time por Letterboxd + Underseen" },
   winners:   { label:"Modo Premiadas",      genres:null, medidor:true, boton:"\uD83C\uDFC6 Premiadas",
                titulo:"Ganadoras a Mejor Pelicula: Oscar's \u00b7 Cannes \u00b7 BAFTA" },
   siglo21:   { label:"Modo Siglo XXI",      genres:null, medidor:true, boton:"\u25c9 Siglo XXI",
