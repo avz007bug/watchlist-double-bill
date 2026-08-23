@@ -1694,6 +1694,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj), "application/json; charset=utf-8")
 
     def do_GET(self):
+        if self.path == "/health":
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+            return
         if self.path in ("/", "/index.html"):
             self._send(200, PAGE, "text/html; charset=utf-8")
         else:
