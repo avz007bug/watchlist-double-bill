@@ -892,12 +892,14 @@ PAGE = r"""<!doctype html>
 <title>Watchlist Double Bill</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Poppins:wght@600&display=swap" rel="stylesheet">
 <style>
   :root{
     --night:#141a2e; --panel:#1c2440; --edge:#2c3557;
     --bone:#ece6d9; --dim:#8b93b4;
     --signal:#ff4d3d; --beam:#7fd6cd;
+    --gold:#e3b85a; --rose:#de7e98; --clay:#c4693f;
+    --geo:"Poppins",var(--sans);
     --serif:"Instrument Serif",Georgia,serif;
     --sans:"Inter",system-ui,-apple-system,sans-serif;
     --mono:"IBM Plex Mono",ui-monospace,monospace;
@@ -911,11 +913,20 @@ PAGE = r"""<!doctype html>
            text-transform:uppercase;color:var(--dim);margin:0 0 10px}
   h1{font-family:var(--serif);font-weight:400;font-size:clamp(38px,7vw,60px);
      line-height:1.02;margin:0 0 12px}
+
+  /* Logo: circulos + logotipo. Es un boton, reinicia la pagina. */
+  .logo{display:flex;align-items:center;gap:15px;width:auto;background:none;
+        border:0;padding:0;margin:0 0 16px;cursor:pointer;transition:opacity .15s}
+  .logo:hover:not(:disabled){opacity:.85;filter:none}
+  .logo:focus-visible{outline:2px solid var(--gold);outline-offset:6px;border-radius:2px}
+  .logo svg{height:clamp(44px,8vw,58px);width:auto;display:block}
+  .logo .word{font-family:var(--geo);font-weight:600;color:var(--bone);
+              font-size:clamp(30px,5.5vw,42px);line-height:1;letter-spacing:-.015em}
   .lede{color:var(--dim);max-width:46ch;margin:0 0 40px}
 
   .bill{display:grid;grid-template-columns:1fr 112px 1fr;gap:14px;align-items:start}
-  .amp{font-family:var(--serif);font-style:italic;font-size:44px;color:var(--signal);
-       line-height:1;padding-top:4px;user-select:none}
+  .amp{font-family:var(--geo);font-weight:600;font-size:34px;color:var(--bone);
+       line-height:1;padding-top:9px;user-select:none}
   .mid{display:flex;flex-direction:column;align-items:center}
   .hint{margin-top:8px;white-space:nowrap;text-align:center;
         font-family:var(--mono);font-size:11px;color:var(--dim)}
@@ -936,13 +947,15 @@ PAGE = r"""<!doctype html>
          letter-spacing:.02em;cursor:pointer;transition:filter .15s}
   button:hover:not(:disabled){filter:brightness(1.12)}
   button:disabled{opacity:.45;cursor:progress}
-  #go{margin-top:22px}
+  #go{margin-top:22px;background:var(--clay)}
   button.ghost{background:transparent;color:var(--beam);border:1px solid var(--edge);
                font-weight:500;margin-top:24px}
   button.ghost:hover:not(:disabled){background:var(--panel);filter:none}
 
   .note{margin-top:14px;font-size:12.5px;color:var(--dim)}
-  button.sinlb{margin-top:9px;padding:11px;font-size:12.5px}
+  button.sinlb{margin-top:9px;padding:11px;font-size:12.5px;
+               color:var(--gold);border-color:var(--gold)}
+  button.sinlb:hover:not(:disabled){background:rgba(227,184,90,.09)}
   .status{margin-top:28px;font-family:var(--mono);font-size:12.5px;color:var(--beam);
           min-height:19px}
   .status.err{color:var(--signal)}
@@ -1108,6 +1121,7 @@ PAGE = r"""<!doctype html>
     .genres p{width:100%;margin:0}
   }
   @media (max-width:560px){
+    .logo{flex-wrap:wrap;gap:10px}
     .bill{grid-template-columns:1fr;gap:8px}
     .amp{text-align:center;font-size:34px;padding:0}
     .hint{margin-top:2px}
@@ -1123,7 +1137,19 @@ PAGE = r"""<!doctype html>
 <body>
 <div class="wrap">
   <p class="eyebrow">Letterboxd</p>
-  <h1>Watchlist<br>double bill</h1>
+  <button class="logo" id="logo" aria-label="Volver al inicio">
+    <svg viewBox="8 5 84 50" role="img" aria-hidden="true">
+      <defs>
+        <clipPath id="lente"><circle cx="33" cy="30" r="25"/></clipPath>
+      </defs>
+      <circle cx="33" cy="30" r="25" fill="#e3b85a"/>
+      <circle cx="67" cy="30" r="25" fill="#de7e98"/>
+      <g clip-path="url(#lente)">
+        <circle cx="67" cy="30" r="25" fill="#c4693f"/>
+      </g>
+    </svg>
+    <span class="word">doublebill</span>
+  </button>
   <p class="lede">Las peliculas que ambos quieren ver, ordenadas por el promedio
      de Letterboxd.</p>
 
@@ -1692,6 +1718,7 @@ function sinCuenta(){
   setMode("discovery");
 }
 
+$("logo").addEventListener("click", () => location.reload());
 $("sinCuenta").addEventListener("click", sinCuenta);
 $("go").addEventListener("click", cross);
 ["a","b"].forEach(id => $(id).addEventListener("keydown", e => { if(e.key==="Enter") cross(); }));
