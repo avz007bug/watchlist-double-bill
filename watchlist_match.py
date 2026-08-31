@@ -1167,14 +1167,17 @@ PAGE = r"""<!doctype html>
   .tv-veredicto b{color:var(--bone);font-weight:500}
 
   .tv-final{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 22px}
-  .tv-final div{border:1px solid var(--edge);border-radius:3px;padding:18px;
+  .tv-final div{border:1px solid var(--edge);border-radius:3px;padding:14px 16px;
                 text-align:center}
   .tv-final .n{font-family:var(--mono);font-size:11px;letter-spacing:.12em;
-               text-transform:uppercase;color:var(--dim)}
-  .tv-final .p{font-family:var(--serif);font-size:44px;color:var(--acc);line-height:1;
-               margin-top:6px}
+               text-transform:uppercase;color:var(--dim);margin:0}
+  /* Numero y unidad en la misma linea: el recuadro deja de ser una torre. */
+  .tv-final .cifra{display:flex;align-items:baseline;justify-content:center;
+                   gap:6px;margin-top:7px}
+  .tv-final .p{font-family:var(--serif);font-size:38px;color:var(--acc);
+               line-height:1;margin:0}
   .tv-final .u{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
-               text-transform:uppercase;color:var(--dim);margin:5px 0 0}
+               text-transform:uppercase;color:var(--dim);margin:0}
 
   /* Meme del ganador. La barra negra de la plantilla esta centrada en
      51.5% / 29% y ocupa el 48% del ancho: el nombre se ajusta ahi dentro. */
@@ -2134,11 +2137,11 @@ function tvFinal(){
     <p class="tv-gana">${titulo}</p>
     <div class="tv-final">
       <div class="${p1 >= p2 ? "gana" : ""}">
-        <p class="n">${esc(n1)}</p><p class="p">${p1}</p>
-        <p class="u">pts</p></div>
+        <p class="n">${esc(n1)}</p>
+        <div class="cifra"><p class="p">${p1}</p><p class="u">pts</p></div></div>
       <div class="${p2 >= p1 ? "gana" : ""}">
-        <p class="n">${esc(n2)}</p><p class="p">${p2}</p>
-        <p class="u">pts</p></div>
+        <p class="n">${esc(n2)}</p>
+        <div class="cifra"><p class="p">${p2}</p><p class="u">pts</p></div></div>
     </div>
     <div class="tv-acciones">
       <button class="primario" id="tvOtra">Jugar otra vez</button>
