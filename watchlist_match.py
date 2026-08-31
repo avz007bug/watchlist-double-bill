@@ -28,6 +28,7 @@ import sys
 import threading
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
@@ -579,6 +580,52 @@ def rank(slugs):
 
 
 # ─────────────────────────────────────────────────────────────
+# Trivial: pool de peliculas para el juego local
+# ─────────────────────────────────────────────────────────────
+
+# Nombre publico del set -> lista interna. Cerrado a proposito.
+TRIVIA_SETS = {
+    "descubrimiento": "alltime",
+    "siglo21": "modern",
+    "premiadas": "winners",
+}
+
+
+def trivia_pool(sets):
+    """
+    Peliculas para el juego, unidas y sin repetir. Todo sale de la semilla:
+    cero peticiones a Letterboxd.
+
+    Se descarta lo que no tenga anio o rating, porque las preguntas comparan
+    justamente esos campos y una ficha incompleta rompe la ronda.
+    """
+    claves = [TRIVIA_SETS[x] for x in sets if x in TRIVIA_SETS]
+    if not claves:
+        raise ValueError("Elige al menos un set valido.")
+
+    vistos = set()
+    pool = []
+    for k in claves:
+        for slug in slugs_de_lista(k):
+            if slug in vistos:
+                continue
+            vistos.add(slug)
+            with _cache_lock:
+                f = _film_cache.get(slug)
+            if not f or f.get("year") is None or f.get("rating") is None:
+                continue
+            pool.append({
+                "slug": slug,
+                "title": f.get("title") or slug,
+                "year": f["year"],
+                "rating": f["rating"],      # sin redondear
+                "poster": f.get("poster"),
+                "url": f.get("url"),
+            })
+    return pool
+
+
+# ─────────────────────────────────────────────────────────────
 # Recomendacion: la mejor del top 500 que ninguno haya visto
 # ─────────────────────────────────────────────────────────────
 
@@ -1062,6 +1109,76 @@ PAGE = r"""<!doctype html>
 
   .warn{color:var(--sc,var(--beam))}
 
+  /* ── Trivial ─────────────────────────────────────────── */
+  button.tvbtn{margin-top:9px;padding:11px;font-size:12.5px;
+               color:var(--rose);border-color:var(--rose)}
+  button.tvbtn:hover:not(:disabled){background:rgba(222,126,152,.09)}
+
+  .tv{--acc:var(--rose)}
+  .tv h3{font-family:var(--geo);font-weight:600;font-size:23px;margin:0 0 4px;
+         color:var(--bone)}
+  .tv .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.16em;
+              text-transform:uppercase;color:var(--acc);margin:0 0 22px}
+  .tv .campo{font-family:var(--mono);font-size:10.5px;letter-spacing:.14em;
+             text-transform:uppercase;color:var(--dim);margin:0 0 8px}
+  .tv-sets{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:24px}
+  .tv-nombres{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:26px}
+  .tv-acciones{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  .tv-acciones button{width:auto;padding:12px 20px;font-size:13px}
+  .tv .primario{background:var(--clay);color:#fff;border:0;font-weight:600}
+
+  .tv-barra{display:flex;justify-content:space-between;align-items:baseline;
+            font-family:var(--mono);font-size:11.5px;color:var(--dim);
+            padding-bottom:12px;border-bottom:1px solid var(--edge);margin-bottom:22px}
+  .tv-barra b{color:var(--bone);font-weight:500}
+
+  .tv-preg{font-family:var(--serif);font-size:clamp(24px,4.5vw,32px);line-height:1.15;
+           margin:0 0 20px;color:var(--bone)}
+  .tv-par{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin:0 0 24px}
+  .tv-film{text-align:center}
+  .tv-film img{width:100%;max-width:148px;border-radius:3px;background:var(--panel);
+               display:block;margin:0 auto}
+  .tv-film .hueco{width:100%;max-width:148px;aspect-ratio:2/3;border-radius:3px;
+                  background:var(--panel);margin:0 auto}
+  .tv-film .t{font-size:14px;line-height:1.25;margin-top:10px}
+  .tv-film .lado{font-family:var(--mono);font-size:10px;letter-spacing:.16em;
+                 text-transform:uppercase;color:var(--dim);margin-bottom:8px}
+  .tv-film .dato{font-family:var(--serif);font-size:26px;color:var(--acc);margin-top:8px}
+
+  .tv-turno{font-family:var(--mono);font-size:12px;color:var(--acc);
+            margin:0 0 12px;letter-spacing:.04em}
+  .tv-ops{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+  .tv-ops button{width:100%;background:transparent;border:1px solid var(--edge);
+                 color:var(--bone);font-weight:500;padding:13px 8px;font-size:13px}
+  .tv-ops button:hover:not(:disabled){border-color:var(--acc);filter:none}
+
+  .tv-rev{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:0 0 18px}
+  .tv-rev div{border:1px solid var(--edge);border-radius:3px;padding:12px 14px}
+  .tv-rev .quien{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+                 text-transform:uppercase;color:var(--dim);margin-bottom:6px}
+  .tv-rev .eligio{font-size:15px}
+  .tv-rev .bien{color:#7fd6cd}
+  .tv-rev .mal{color:var(--signal)}
+  .tv-veredicto{font-family:var(--mono);font-size:12.5px;color:var(--dim);
+                margin:0 0 18px;line-height:1.7}
+  .tv-veredicto b{color:var(--bone);font-weight:500}
+
+  .tv-final{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:0 0 22px}
+  .tv-final div{border:1px solid var(--edge);border-radius:3px;padding:18px;
+                text-align:center}
+  .tv-final .n{font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+               text-transform:uppercase;color:var(--dim)}
+  .tv-final .p{font-family:var(--serif);font-size:44px;color:var(--acc);line-height:1;
+               margin-top:6px}
+  .tv-final .gana{border-color:var(--acc)}
+  .tv-gana{font-family:var(--serif);font-size:clamp(24px,5vw,34px);margin:0 0 22px;
+           color:var(--bone)}
+
+  @media (max-width:560px){
+    .tv-nombres{grid-template-columns:1fr}
+    .tv-ops{grid-template-columns:1fr}
+  }
+
   .credits{max-width:760px;margin:0 auto;padding:0 24px 60px;
            font-family:var(--mono);font-size:11.5px;color:var(--dim);line-height:1.9}
   .credits .sep{color:var(--edge);margin:0 6px}
@@ -1150,6 +1267,7 @@ PAGE = r"""<!doctype html>
     </svg>
     <span class="word">doublebill</span>
   </button>
+  <div id="app">
   <p class="lede">Las peliculas que ambos quieren ver, ordenadas por el promedio
      de Letterboxd.</p>
 
@@ -1169,6 +1287,7 @@ PAGE = r"""<!doctype html>
   </div>
   <button id="go">Match watchlists</button>
   <button class="ghost sinlb" id="sinCuenta">Usar sin Letterboxd</button>
+  <button class="ghost tvbtn" id="btnTrivia">Trivial &mdash; 2 jugadores</button>
   <p class="note">Basta el nombre de usuario; tambien vale pegar el link del perfil.
      Solo funciona con perfiles publicos, y de las peliculas ya vistas solo se puede
      leer la actividad reciente.</p>
@@ -1177,6 +1296,9 @@ PAGE = r"""<!doctype html>
   <div id="gate"></div>
   <div id="out"></div>
   <div id="deck"></div>
+  </div>
+
+  <div id="trivia" class="tv" hidden></div>
 </div>
 
 <footer class="credits">
@@ -1718,6 +1840,274 @@ function sinCuenta(){
   setMode("discovery");
 }
 
+
+// ═══════════════════════════════════════════════════════════
+// Trivial: juego local de dos jugadores. Todo vive en memoria;
+// recargar la pagina pierde la partida y esta bien asi.
+// ═══════════════════════════════════════════════════════════
+
+// Lista extensible. Para sumar una pregunta basta con anadir una entrada:
+// nadie mas necesita cambiar. "disponible" deja fuera la pregunta cuando
+// alguna de las dos peliculas no tiene ese dato.
+//
+// Pendiente: {"id":"duracion", enunciado:"\u00bfCu\u00e1l dura m\u00e1s?",
+//   valor:f=>f.runtime, gana:"mayor", formato:v=>v+" min"} -- falta que la
+//   semilla traiga la duracion.
+const TV_PREGUNTAS = [
+  { id:"anio",
+    enunciado:"\u00bfCu\u00e1l se estren\u00f3 antes?",
+    valor: f => f.year,
+    gana: "menor",
+    formato: v => String(v) },
+  { id:"rating",
+    enunciado:"\u00bfCu\u00e1l tiene mejor rating?",
+    valor: f => f.rating,
+    gana: "mayor",
+    formato: v => Number(v).toFixed(2) },
+];
+
+const TV_SETS = [
+  ["descubrimiento","Descubrimiento"],
+  ["siglo21","Siglo XXI"],
+  ["premiadas","Premiadas"],
+];
+const TV_RONDAS = 7;
+const TV_OPS = [["izq","Izquierda"],["empate","Empate"],["der","Derecha"]];
+
+let TV = null;                       // partida en curso
+let TVnombres = ["", ""];            // se conservan entre partidas
+let TVsets = ["descubrimiento"];
+
+const tvBox = () => $("trivia");
+
+function tvAbrir(){
+  $("app").hidden = true;
+  tvBox().hidden = false;
+  tvConfig();
+}
+function tvCerrar(){
+  TV = null;
+  tvBox().hidden = true;
+  tvBox().innerHTML = "";
+  $("app").hidden = false;
+}
+
+// ── configuracion ──
+function tvConfig(aviso){
+  const sets = TV_SETS.map(([id,txt]) =>
+    `<button class="gbtn" data-set="${id}" aria-pressed="${TVsets.includes(id)}">${txt}</button>`
+  ).join("");
+  tvBox().innerHTML = `
+    <h3>Trivial</h3>
+    <p class="kicker">Dos jugadores, un dispositivo</p>
+    <p class="campo">De donde salen las peliculas</p>
+    <div class="tv-sets">${sets}</div>
+    <p class="campo">Nombres (opcional)</p>
+    <div class="tv-nombres">
+      <input type="text" id="tvN1" placeholder="Jugador 1" value="${esc(TVnombres[0])}"
+             autocomplete="off" maxlength="18">
+      <input type="text" id="tvN2" placeholder="Jugador 2" value="${esc(TVnombres[1])}"
+             autocomplete="off" maxlength="18">
+    </div>
+    ${aviso ? `<p class="tv-veredicto">${esc(aviso)}</p>` : ""}
+    <div class="tv-acciones">
+      <button class="primario" id="tvGo">Empezar</button>
+      <button class="ghost" id="tvSalir" style="margin-top:0">Salir</button>
+    </div>`;
+
+  tvBox().querySelectorAll("[data-set]").forEach(b =>
+    b.addEventListener("click", () => {
+      const id = b.dataset.set;
+      TVsets = TVsets.includes(id) ? TVsets.filter(x => x !== id) : TVsets.concat(id);
+      tvGuardarNombres();
+      tvConfig();
+    }));
+  $("tvGo").addEventListener("click", tvEmpezar);
+  $("tvSalir").addEventListener("click", tvCerrar);
+}
+
+function tvGuardarNombres(){
+  if($("tvN1")) TVnombres = [$("tvN1").value.trim(), $("tvN2").value.trim()];
+}
+
+async function tvEmpezar(){
+  tvGuardarNombres();
+  if(!TVsets.length){ tvConfig("Elige al menos un set."); return; }
+
+  $("tvGo").disabled = true;
+  $("tvGo").textContent = "Cargando\u2026";
+  let pool;
+  try{
+    const r = await fetch("/api/trivia/pool?sets=" + encodeURIComponent(TVsets.join(",")));
+    const d = await r.json();
+    if(!r.ok) throw new Error(d.error || "No se pudo cargar el pool.");
+    pool = d.pool;
+  }catch(e){
+    tvConfig(e.message); return;
+  }
+
+  const faltan = TV_RONDAS * 2;
+  if(pool.length < faltan){
+    tvConfig(`Con esos sets solo hay ${pool.length} peliculas y hacen falta `
+             + `${faltan}. Marca alguno mas.`);
+    return;
+  }
+
+  // Barajado de Fisher-Yates: 14 peliculas unicas para toda la partida.
+  const baraja = pool.slice();
+  for(let i = baraja.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [baraja[i], baraja[j]] = [baraja[j], baraja[i]];
+  }
+  const elegidas = baraja.slice(0, faltan);
+
+  const rondas = [];
+  for(let i = 0; i < TV_RONDAS; i++){
+    const a = elegidas[i*2], b = elegidas[i*2 + 1];
+    const posibles = TV_PREGUNTAS.filter(q =>
+      q.valor(a) !== null && q.valor(a) !== undefined &&
+      q.valor(b) !== null && q.valor(b) !== undefined);
+    const q = posibles[Math.floor(Math.random() * posibles.length)];
+    rondas.push({ a, b, q, r1:null, r2:null });
+  }
+
+  TV = { rondas, i:0, turno:1, puntos:[0,0],
+         nombres:[TVnombres[0] || "Jugador 1", TVnombres[1] || "Jugador 2"] };
+  tvRonda();
+}
+
+// ── ronda ──
+function tvCorrecta(r){
+  const va = r.q.valor(r.a), vb = r.q.valor(r.b);
+  if(va === vb) return "empate";
+  if(r.q.gana === "menor") return va < vb ? "izq" : "der";
+  return va > vb ? "izq" : "der";
+}
+
+function tvFicha(f, lado){
+  const img = f.poster
+    ? `<img src="${esc(f.poster)}" alt="" loading="lazy">`
+    : `<div class="hueco"></div>`;
+  return `<div class="tv-film">
+      <p class="lado">${lado}</p>
+      ${img}
+      <div class="t">${esc(f.title)}</div>
+    </div>`;
+}
+
+function tvBarra(){
+  const t = TV.nombres;
+  return `<div class="tv-barra">
+      <span>Ronda <b>${TV.i + 1}</b> de ${TV_RONDAS}</span>
+      <span>${esc(t[0])} <b>${TV.puntos[0]}</b> &nbsp;&middot;&nbsp;
+            ${esc(t[1])} <b>${TV.puntos[1]}</b></span>
+    </div>`;
+}
+
+function tvRonda(){
+  const r = TV.rondas[TV.i];
+  const quien = TV.nombres[TV.turno - 1];
+  tvBox().innerHTML = `
+    ${tvBarra()}
+    <p class="tv-preg">${r.q.enunciado}</p>
+    <div class="tv-par">${tvFicha(r.a,"Izquierda")}${tvFicha(r.b,"Derecha")}</div>
+    <p class="tv-turno">Turno de ${esc(quien)}${TV.turno === 2
+        ? " \u00b7 la respuesta anterior est\u00e1 oculta" : ""}</p>
+    <div class="tv-ops">${TV_OPS.map(([v,t]) =>
+      `<button data-op="${v}">${t}</button>`).join("")}</div>`;
+
+  tvBox().querySelectorAll("[data-op]").forEach(b =>
+    b.addEventListener("click", () => tvElegir(b.dataset.op)));
+}
+
+function tvElegir(op){
+  const r = TV.rondas[TV.i];
+  if(TV.turno === 1){
+    r.r1 = op;
+    TV.turno = 2;
+    tvRonda();              // se repinta sin rastro de lo elegido
+    return;
+  }
+  r.r2 = op;
+  tvRevelar();
+}
+
+// ── revelacion: solo cuando los dos respondieron ──
+function tvRevelar(){
+  const r = TV.rondas[TV.i];
+  const ok = tvCorrecta(r);
+  const a1 = r.r1 === ok, a2 = r.r2 === ok;
+
+  let p1, p2;
+  if(a1 && !a2){ p1 = 1; p2 = 0; }
+  else if(!a1 && a2){ p1 = 0; p2 = 1; }
+  else { p1 = 0.5; p2 = 0.5; }
+  TV.puntos[0] += p1;
+  TV.puntos[1] += p2;
+
+  const etiqueta = v => (TV_OPS.find(o => o[0] === v) || [v,v])[1];
+  const tarjeta = (n, elec, acierto, pts) => `<div>
+      <p class="quien">${esc(n)}</p>
+      <p class="eligio ${acierto ? "bien" : "mal"}">${etiqueta(elec)}</p>
+      <p class="quien" style="margin:6px 0 0">+${pts}</p>
+    </div>`;
+
+  const va = r.q.formato(r.q.valor(r.a));
+  const vb = r.q.formato(r.q.valor(r.b));
+  const ultima = TV.i === TV_RONDAS - 1;
+
+  tvBox().innerHTML = `
+    ${tvBarra()}
+    <p class="tv-preg">${r.q.enunciado}</p>
+    <div class="tv-par">
+      ${tvFicha(r.a,"Izquierda").replace("</div>",
+        `<div class="dato">${va}</div></div>`)}
+      ${tvFicha(r.b,"Derecha").replace("</div>",
+        `<div class="dato">${vb}</div></div>`)}
+    </div>
+    <p class="tv-veredicto">Respuesta correcta: <b>${etiqueta(ok)}</b></p>
+    <div class="tv-rev">
+      ${tarjeta(TV.nombres[0], r.r1, a1, p1)}
+      ${tarjeta(TV.nombres[1], r.r2, a2, p2)}
+    </div>
+    <div class="tv-acciones">
+      <button class="primario" id="tvNext">${ultima ? "Ver resultado" : "Siguiente ronda"}</button>
+    </div>`;
+
+  $("tvNext").addEventListener("click", () => {
+    if(ultima){ tvFinal(); return; }
+    TV.i++; TV.turno = 1; tvRonda();
+  });
+}
+
+// ── pantalla final ──
+function tvFinal(){
+  const [p1, p2] = TV.puntos;
+  const [n1, n2] = TV.nombres;
+  const titulo = p1 === p2 ? "Empate"
+    : `Gana ${esc(p1 > p2 ? n1 : n2)}`;
+
+  tvBox().innerHTML = `
+    <h3>Fin de la partida</h3>
+    <p class="kicker">${TV_RONDAS} rondas</p>
+    <p class="tv-gana">${titulo}</p>
+    <div class="tv-final">
+      <div class="${p1 >= p2 ? "gana" : ""}">
+        <p class="n">${esc(n1)}</p><p class="p">${p1}</p></div>
+      <div class="${p2 >= p1 ? "gana" : ""}">
+        <p class="n">${esc(n2)}</p><p class="p">${p2}</p></div>
+    </div>
+    <div class="tv-acciones">
+      <button class="primario" id="tvOtra">Jugar otra vez</button>
+      <button class="ghost" id="tvSalir2" style="margin-top:0">Salir</button>
+    </div>`;
+
+  $("tvOtra").addEventListener("click", () => { TV = null; tvConfig(); });
+  $("tvSalir2").addEventListener("click", tvCerrar);
+}
+
+$("btnTrivia").addEventListener("click", tvAbrir);
+
 $("logo").addEventListener("click", () => location.reload());
 $("sinCuenta").addEventListener("click", sinCuenta);
 $("go").addEventListener("click", cross);
@@ -1753,6 +2143,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/api/stats":
             self._json(200, stats_red())
+            return
+        if self.path.startswith("/api/trivia/pool"):
+            # Va en GET a proposito: el control de cuota vive en do_POST, y esta
+            # ruta no genera ni una peticion a Letterboxd (todo sale de la semilla).
+            consulta = urllib.parse.urlparse(self.path).query
+            crudo = urllib.parse.parse_qs(consulta).get("sets", [""])[0]
+            sets = [x.strip() for x in crudo.split(",") if x.strip()]
+            try:
+                self._json(200, {"pool": trivia_pool(sets)})
+            except ValueError as e:
+                self._json(400, {"error": str(e)})
             return
         if self.path in ("/", "/index.html"):
             self._send(200, PAGE, "text/html; charset=utf-8")
