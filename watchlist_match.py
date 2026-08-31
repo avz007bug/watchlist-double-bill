@@ -55,6 +55,9 @@ CACHE_PATH = os.environ.get(
 SEED_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          "film_cache_seed.json")
 
+# Imagenes y demas archivos servidos tal cual desde /static/
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+
 # Limite por visitante. Sin esto, una sola persona puede lanzar cientos de
 # peticiones a Letterboxd desde el servidor. Solo aplica a los endpoints caros.
 RATE_WINDOW = 600       # segundos
@@ -1170,6 +1173,18 @@ PAGE = r"""<!doctype html>
                text-transform:uppercase;color:var(--dim)}
   .tv-final .p{font-family:var(--serif);font-size:44px;color:var(--acc);line-height:1;
                margin-top:6px}
+  .tv-final .u{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+               text-transform:uppercase;color:var(--dim);margin:5px 0 0}
+
+  /* Meme del ganador. La barra negra de la plantilla esta centrada en
+     51.5% / 29% y ocupa el 48% del ancho: el nombre se ajusta ahi dentro. */
+  .tv-meme{position:relative;max-width:330px;margin:0 auto 20px}
+  .tv-meme img{width:100%;display:block;border-radius:3px}
+  .tv-meme span{position:absolute;left:51.5%;top:29%;transform:translate(-50%,-50%);
+                width:44%;text-align:center;color:#fff;font-family:var(--geo);
+                font-weight:600;letter-spacing:.05em;text-transform:uppercase;
+                font-size:clamp(10px,3.6vw,15px);line-height:1.1;
+                white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .tv-final .gana{border-color:var(--acc)}
   .tv-gana{font-family:var(--serif);font-size:clamp(24px,5vw,34px);margin:0 0 22px;
            color:var(--bone)}
@@ -1879,6 +1894,7 @@ let TVnombres = ["", ""];            // se conservan entre partidas
 let TVsets = ["descubrimiento"];
 
 const tvBox = () => $("trivia");
+const tvPts = n => `${n} pts`;
 
 function tvAbrir(){
   $("app").hidden = true;
@@ -1962,12 +1978,26 @@ async function tvEmpezar(){
   const elegidas = baraja.slice(0, faltan);
 
   const rondas = [];
+  let repes = 0;                 // cuantas seguidas llevamos del mismo tipo
   for(let i = 0; i < TV_RONDAS; i++){
     const a = elegidas[i*2], b = elegidas[i*2 + 1];
-    const posibles = TV_PREGUNTAS.filter(q =>
+
+    // Solo las preguntas que este par puede responder: si a alguna de las dos
+    // le falta el dato, esa pregunta queda fuera sola.
+    let posibles = TV_PREGUNTAS.filter(q =>
       q.valor(a) !== null && q.valor(a) !== undefined &&
       q.valor(b) !== null && q.valor(b) !== undefined);
+
+    // Nada de tres seguidas iguales. Si al descartar el tipo repetido no queda
+    // ninguna opcion, se deja pasar: mejor repetir que quedarse sin pregunta.
+    const previo = rondas.length ? rondas[rondas.length - 1].q : null;
+    if(repes >= 2 && previo){
+      const otras = posibles.filter(q => q.id !== previo.id);
+      if(otras.length) posibles = otras;
+    }
+
     const q = posibles[Math.floor(Math.random() * posibles.length)];
+    repes = (previo && q.id === previo.id) ? repes + 1 : 1;
     rondas.push({ a, b, q, r1:null, r2:null });
   }
 
@@ -1999,8 +2029,8 @@ function tvBarra(){
   const t = TV.nombres;
   return `<div class="tv-barra">
       <span>Ronda <b>${TV.i + 1}</b> de ${TV_RONDAS}</span>
-      <span>${esc(t[0])} <b>${TV.puntos[0]}</b> &nbsp;&middot;&nbsp;
-            ${esc(t[1])} <b>${TV.puntos[1]}</b></span>
+      <span>${esc(t[0])} <b>${TV.puntos[0]}</b> pts &nbsp;&middot;&nbsp;
+            ${esc(t[1])} <b>${TV.puntos[1]}</b> pts</span>
     </div>`;
 }
 
@@ -2049,7 +2079,7 @@ function tvRevelar(){
   const tarjeta = (n, elec, acierto, pts) => `<div>
       <p class="quien">${esc(n)}</p>
       <p class="eligio ${acierto ? "bien" : "mal"}">${etiqueta(elec)}</p>
-      <p class="quien" style="margin:6px 0 0">+${pts}</p>
+      <p class="quien" style="margin:6px 0 0">+${tvPts(pts)}</p>
     </div>`;
 
   const va = r.q.formato(r.q.valor(r.a));
@@ -2087,15 +2117,28 @@ function tvFinal(){
   const titulo = p1 === p2 ? "Empate"
     : `Gana ${esc(p1 > p2 ? n1 : n2)}`;
 
+  // Guino cinefilo: el ganador entra al meme. Si el archivo no esta en
+  // static/, el bloque se quita solo y la pantalla queda igual de bien.
+  const campeon = p1 === p2 ? null : (p1 > p2 ? n1 : n2);
+  const meme = campeon ? `
+    <div class="tv-meme">
+      <img src="/static/absolute-cinema.jpg" alt="Absolute cinema"
+           onerror="this.parentNode.remove()">
+      <span>${esc(campeon)}</span>
+    </div>` : "";
+
   tvBox().innerHTML = `
     <h3>Fin de la partida</h3>
     <p class="kicker">${TV_RONDAS} rondas</p>
+    ${meme}
     <p class="tv-gana">${titulo}</p>
     <div class="tv-final">
       <div class="${p1 >= p2 ? "gana" : ""}">
-        <p class="n">${esc(n1)}</p><p class="p">${p1}</p></div>
+        <p class="n">${esc(n1)}</p><p class="p">${p1}</p>
+        <p class="u">pts</p></div>
       <div class="${p2 >= p1 ? "gana" : ""}">
-        <p class="n">${esc(n2)}</p><p class="p">${p2}</p></div>
+        <p class="n">${esc(n2)}</p><p class="p">${p2}</p>
+        <p class="u">pts</p></div>
     </div>
     <div class="tv-acciones">
       <button class="primario" id="tvOtra">Jugar otra vez</button>
@@ -2144,6 +2187,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/stats":
             self._json(200, stats_red())
             return
+        if self.path.startswith("/static/"):
+            self._estatico(self.path)
+            return
         if self.path.startswith("/api/trivia/pool"):
             # Va en GET a proposito: el control de cuota vive en do_POST, y esta
             # ruta no genera ni una peticion a Letterboxd (todo sale de la semilla).
@@ -2159,6 +2205,38 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, PAGE, "text/html; charset=utf-8")
         else:
             self._send(404, "not found", "text/plain; charset=utf-8")
+
+    TIPOS = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+             ".webp": "image/webp", ".gif": "image/gif", ".svg": "image/svg+xml",
+             ".ico": "image/x-icon"}
+
+    def _estatico(self, ruta):
+        """
+        Sirve un archivo de la carpeta static/. Solo el nombre, sin rutas:
+        basename mas lista blanca de caracteres corta cualquier intento de
+        salirse de la carpeta.
+        """
+        nombre = os.path.basename(urllib.parse.urlparse(ruta).path)
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", nombre) or nombre.startswith("."):
+            self._send(404, "not found", "text/plain; charset=utf-8")
+            return
+        camino = os.path.join(STATIC_DIR, nombre)
+        if not os.path.isfile(camino):
+            self._send(404, "not found", "text/plain; charset=utf-8")
+            return
+        try:
+            with open(camino, "rb") as f:
+                data = f.read()
+        except OSError:
+            self._send(404, "not found", "text/plain; charset=utf-8")
+            return
+        ext = os.path.splitext(nombre)[1].lower()
+        self.send_response(200)
+        self.send_header("Content-Type", self.TIPOS.get(ext, "application/octet-stream"))
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "public, max-age=86400")
+        self.end_headers()
+        self.wfile.write(data)
 
     def _ip(self):
         """La IP real del visitante. Detras de un proxy viene en el header."""
