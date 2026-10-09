@@ -100,6 +100,14 @@ LISTS = {
         "pages": 10,
     },
 }
+# Peliculas vetadas a mano: nunca se recomiendan ni entran al Trivial, salgan
+# en la lista que salgan. Se filtran al leer, no al descargar, asi que volver
+# a correr --warm no las resucita. Para readmitir una, basta con borrar su
+# linea de aqui.
+EXCLUIDAS = {
+    "twin-peaks-fire-walk-with-me",
+}
+
 SCAN_CHUNK = 25         # cuantas fichas abrimos por tanda antes de volver a evaluar
 MAX_SCAN = 250          # techo de fichas a revisar antes de rendirse
 
@@ -684,9 +692,10 @@ def slugs_de_lista(list_key):
             if not slugs:
                 break
             for s in slugs:
-                if s not in vistos:
-                    vistos.add(s)
-                    todos.append(s)
+                if s in vistos or s in EXCLUIDAS:
+                    continue
+                vistos.add(s)
+                todos.append(s)
 
     def puntaje(slug):
         f = _film_cache.get(slug) or {}
